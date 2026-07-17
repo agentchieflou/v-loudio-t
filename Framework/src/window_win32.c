@@ -218,8 +218,11 @@ static void cuif_ensure_gl_root_context(void) {
     pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
     pfd.iPixelType = PFD_TYPE_RGBA;
     pfd.cColorBits = 32;
-    pfd.cDepthBits = 24;
-    pfd.cStencilBits = 8;
+    /* No depth/stencil requested (#96) -- cuif is a pure 2D renderer, GL_DEPTH_TEST
+     * is explicitly disabled every frame, and nothing anywhere in Framework/src/
+     * touches the stencil buffer. Requesting them was pure unused per-window
+     * backing-store cost, worse under MSAA where depth/stencil renderbuffers
+     * get multisampled too. */
 
     int dummy_pf = ChoosePixelFormat(cuif_root_hdc, &pfd);
     if (dummy_pf != 0 && SetPixelFormat(cuif_root_hdc, dummy_pf, &pfd)) {
@@ -257,8 +260,12 @@ static bool cuif_init_gl_context(cuif_window* window) {
     pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
     pfd.iPixelType = PFD_TYPE_RGBA;
     pfd.cColorBits = 32;
-    pfd.cDepthBits = 24;
-    pfd.cStencilBits = 8;
+    /* No depth/stencil requested (#96) -- see the matching comment in
+     * cuif_ensure_gl_root_context(). This is the per-window backing store
+     * that actually matters: every plugin instance pays for its own
+     * unshared framebuffer (wglShareLists in #91 shares GL objects, not
+     * this), so dropping unused depth+stencil planes here -- multiplied 4x
+     * under MSAA -- is real, not theoretical, savings per open editor. */
     pfd.iLayerType = PFD_MAIN_PLANE;
 
     int pixel_format = 0;
@@ -270,8 +277,6 @@ static bool cuif_init_gl_context(cuif_window* window) {
             WGL_DOUBLE_BUFFER_ARB, TRUE,
             WGL_PIXEL_TYPE_ARB, WGL_TYPE_RGBA_ARB,
             WGL_COLOR_BITS_ARB, 32,
-            WGL_DEPTH_BITS_ARB, 24,
-            WGL_STENCIL_BITS_ARB, 8,
             WGL_SAMPLE_BUFFERS_ARB, 1,
             WGL_SAMPLES_ARB, CUIF_MSAA_SAMPLES,
             0
