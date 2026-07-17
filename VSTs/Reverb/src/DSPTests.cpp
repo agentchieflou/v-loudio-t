@@ -7,6 +7,9 @@
 #include "SharedStructures.h"
 #include "cuif/ring_buffer.h"
 #include "ReverbThemeMapping.h"
+#include "ReverbLayout.h"
+#include <set>
+#include <string>
 #include <iostream>
 #include <cassert>
 #include <cmath>
@@ -197,6 +200,91 @@ void testUiThemeMapping() {
     std::cout << "  themeForUiThemeIndex() maps the uiTheme parameter's choice index correctly, with a safe fallback. Pass." << std::endl;
 }
 
+static bool rectsOverlap(const ReverbWidgetRect& a, const ReverbWidgetRect& b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x &&
+           a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+void testReverbLayoutNoOverlapWithinVisibilityGroups() {
+    std::cout << "Running testReverbLayoutNoOverlapWithinVisibilityGroups..." << std::endl;
+
+    const float panelW = 800.0f, panelH = 600.0f;
+    auto layout = computeReverbLayout(panelW, panelH);
+
+    /*
+     * Global rects are visible alongside whichever tab is active, so they
+     * must not overlap Main OR Advanced rects, nor each other. Main and
+     * Advanced rects are never shown simultaneously, so they're allowed to
+     * occupy the same screen space -- this is the same overlap bug class
+     * as #64 (analyzerLeft/analyzerRight sharing one rect), generalized.
+     */
+    for (size_t i = 0; i < layout.size(); ++i) {
+        for (size_t j = i + 1; j < layout.size(); ++j) {
+            const auto& a = layout[i];
+            const auto& b = layout[j];
+
+            bool sameGroup = (a.group == b.group);
+            bool eitherIsGlobal = (a.group == ReverbLayoutGroup::Global || b.group == ReverbLayoutGroup::Global);
+            bool mustNotOverlap = sameGroup || eitherIsGlobal;
+
+            if (mustNotOverlap && rectsOverlap(a, b)) {
+                std::cout << "  FAIL: '" << a.id << "' overlaps '" << b.id << "'" << std::endl;
+            }
+            assert(!mustNotOverlap || !rectsOverlap(a, b));
+        }
+    }
+
+    std::cout << "  No two widgets that can be visible at the same time overlap. Pass." << std::endl;
+}
+
+void testReverbLayoutStaysInBounds() {
+    std::cout << "Running testReverbLayoutStaysInBounds..." << std::endl;
+
+    const float panelW = 800.0f, panelH = 600.0f;
+    auto layout = computeReverbLayout(panelW, panelH);
+
+    for (const auto& rect : layout) {
+        bool inBounds = rect.x >= 0.0f && rect.y >= 0.0f &&
+                         rect.x + rect.w <= panelW && rect.y + rect.h <= panelH;
+        if (!inBounds) {
+            std::cout << "  FAIL: '" << rect.id << "' is out of panel bounds ("
+                       << rect.x << "," << rect.y << "," << rect.w << "," << rect.h << ")" << std::endl;
+        }
+        assert(inBounds);
+    }
+
+    std::cout << "  All widgets stay within the panel bounds. Pass." << std::endl;
+}
+
+void testReverbLayoutHasAllExpectedWidgets() {
+    std::cout << "Running testReverbLayoutHasAllExpectedWidgets..." << std::endl;
+
+    auto layout = computeReverbLayout(800.0f, 600.0f);
+
+    std::set<std::string> ids;
+    for (const auto& rect : layout) ids.insert(rect.id);
+
+    static const char* expected[] = {
+        "tabbar", "dropdown.mode", "dropdown.theme", "button.freeze",
+        "knob.decayTime", "knob.preDelay", "knob.damping", "knob.width", "knob.dryWet", "knob.distance", "knob.thickness",
+        "bezier.decayEq", "analyzer.left", "analyzer.right",
+        "knob.postEqLowGain", "knob.postEqMidGain", "knob.postEqHighGain",
+        "knob.crossoverLowMid", "knob.crossoverMidHigh",
+        "knob.duckThreshold", "knob.duckAmount", "knob.duckRelease",
+        "knob.gateThreshold", "knob.gateTime",
+    };
+
+    for (const char* id : expected) {
+        if (ids.find(id) == ids.end()) {
+            std::cout << "  FAIL: layout is missing '" << id << "'" << std::endl;
+        }
+        assert(ids.find(id) != ids.end());
+    }
+
+    assert(ids.size() == sizeof(expected) / sizeof(expected[0]));
+    std::cout << "  Layout includes exactly the expected 24 widgets (no missing, no duplicate ids). Pass." << std::endl;
+}
+
 int main() {
     std::cout << "==============================" << std::endl;
     std::cout << "Starting Loudio Reverb DSP Tests" << std::endl;
@@ -209,6 +297,9 @@ int main() {
         testDuckingEnvelope();
         testParameterRingBuffer();
         testUiThemeMapping();
+        testReverbLayoutNoOverlapWithinVisibilityGroups();
+        testReverbLayoutStaysInBounds();
+        testReverbLayoutHasAllExpectedWidgets();
         std::cout << "All DSP tests passed successfully!" << std::endl;
         return 0;
     } catch (const std::exception& e) {

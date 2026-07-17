@@ -1,6 +1,8 @@
 #include "PluginEditor.h"
 #include "ReverbThemeMapping.h"
+#include "ReverbLayout.h"
 #include <cmath>
+#include <cstring>
 
 static float mapParamValueToWidget(int index, float rawVal) {
     switch (index) {
@@ -149,6 +151,25 @@ void LoudioReverbEditor::paint(juce::Graphics& g) {
     g.fillAll(juce::Colours::black);
 }
 
+static const ReverbWidgetRect& findRect(const std::vector<ReverbWidgetRect>& layout, const char* id) {
+    for (const auto& r : layout) {
+        if (std::strcmp(r.id, id) == 0) return r;
+    }
+    jassertfalse; // id not present in the layout -- ReverbLayout.h and this file have drifted apart
+    static ReverbWidgetRect fallback{ "missing", ReverbLayoutGroup::Global, 0.0f, 0.0f, 10.0f, 10.0f };
+    return fallback;
+}
+
+static void tabChangedCallback(cuif_widget* w, float value) {
+    if (!w || !w->parent) return;
+    auto* editor = static_cast<LoudioReverbEditor*>(w->parent->user_data);
+    if (!editor) return;
+
+    bool showAdvanced = ((int)value == 1);
+    if (editor->mainPage) editor->mainPage->visible = !showAdvanced;
+    if (editor->advancedPage) editor->advancedPage->visible = showAdvanced;
+}
+
 /*
  * getWindowHandle() returns null until this Component has an actual native
  * peer -- which is not yet true during the constructor's setSize() call
@@ -181,78 +202,103 @@ void LoudioReverbEditor::ensureCuifWindowCreated() {
     rootContainer = cuif_widget_create_container(0.0f, 0.0f, (float)getWidth(), (float)getHeight());
     rootContainer->user_data = this;
 
-    /* 1. Add Rotary Knobs (X, Y, W, H, Label, DefaultValue, ChangeCallback) */
-    knobs[kParamPreDelay] = cuif_widget_create_knob(30.0f, 70.0f, 70.0f, 70.0f, "Pre-Delay", 0.15f, knobChangedCallback);
-    knobs[kParamDecayTime] = cuif_widget_create_knob(120.0f, 70.0f, 70.0f, 70.0f, "Decay Time", 0.2f, knobChangedCallback);
-    knobs[kParamDamping] = cuif_widget_create_knob(210.0f, 70.0f, 70.0f, 70.0f, "Damping", 0.3f, knobChangedCallback);
-    knobs[kParamWidth] = cuif_widget_create_knob(300.0f, 70.0f, 70.0f, 70.0f, "Width", 0.8f, knobChangedCallback);
-    knobs[kParamDryWet] = cuif_widget_create_knob(390.0f, 70.0f, 70.0f, 70.0f, "Dry/Wet", 0.4f, knobChangedCallback);
-    knobs[kParamDistance] = cuif_widget_create_knob(480.0f, 70.0f, 70.0f, 70.0f, "Distance", 0.5f, knobChangedCallback);
-    knobs[kParamThickness] = cuif_widget_create_knob(570.0f, 70.0f, 70.0f, 70.0f, "Thickness", 0.5f, knobChangedCallback);
+    auto layout = computeReverbLayout((float)getWidth(), (float)getHeight());
 
-    for (int i = 0; i <= kParamThickness; ++i) {
-        if (knobs[i]) {
-            knobs[i]->user_data = (void*)(intptr_t)i;
-            cuif_widget_add_child(rootContainer, knobs[i]);
-        }
+    /* Page containers -- Main starts visible, Advanced starts hidden. Reused whenever the tab changes. */
+    mainPage = cuif_widget_create_container(0.0f, 0.0f, (float)getWidth(), (float)getHeight());
+    mainPage->visible = true;
+    cuif_widget_add_child(rootContainer, mainPage);
+
+    advancedPage = cuif_widget_create_container(0.0f, 0.0f, (float)getWidth(), (float)getHeight());
+    advancedPage->visible = false;
+    cuif_widget_add_child(rootContainer, advancedPage);
+
+    /* 1. Global header: tab bar, mode dropdown, theme dropdown, freeze button (#69) */
+    static const char* tabsList[] = { "Main", "Advanced" };
+    {
+        const auto& r = findRect(layout, "tabbar");
+        tabBar = cuif_widget_create_tabbar(r.x, r.y, r.w, r.h, tabsList, 2, tabChangedCallback);
+        cuif_widget_add_child(rootContainer, tabBar);
     }
 
-    /* 2. Add Freeze Toggle Button */
-    freezeButton = cuif_widget_create_button(680.0f, 85.0f, 80.0f, 30.0f, "FREEZE", true, buttonClickedCallback);
-    freezeButton->user_data = (void*)(intptr_t)kParamFreeze;
-    cuif_widget_add_child(rootContainer, freezeButton);
-
-    /* 3. Add Mode Choice Dropdown */
     static const char* modesList[] = { "Room", "Hall", "Plate", "Cathedral", "Spring" };
-    modeDropdown = cuif_widget_create_dropdown(650.0f, 15.0f, 120.0f, 30.0f, modesList, 5, dropdownChangedCallback);
-    modeDropdown->user_data = (void*)(intptr_t)kParamMode;
-    cuif_widget_add_child(rootContainer, modeDropdown);
-
-    /* 3b. Add UI Theme Dropdown (#68) */
-    static const char* themesList[] = { "Default", "Hello Kitty", "Greens" };
-    themeDropdown = cuif_widget_create_dropdown(490.0f, 15.0f, 140.0f, 30.0f, themesList, 3, themeChangedCallback);
-    themeDropdown->user_data = (void*)(intptr_t)kParamUiTheme;
-    cuif_widget_add_child(rootContainer, themeDropdown);
-
-    /* 4. Add Bezier EQ Node Editor */
-    bezierEditor = cuif_widget_create_bezier_editor(30.0f, 180.0f, 340.0f, 220.0f, 3, bezierChangedCallback);
-    bezierEditor->user_data = this;
-    /* Anchor horizontal coordinates */
-    bezierEditor->u.bezier_editor.node_x[0] = 0.1f;
-    bezierEditor->u.bezier_editor.node_x[1] = 0.5f;
-    bezierEditor->u.bezier_editor.node_x[2] = 0.9f;
-    cuif_widget_add_child(rootContainer, bezierEditor);
-
-    /* 5. Add Stereo Spectrogram Visualizers */
-    analyzerLeft = cuif_widget_create_analyzer(430.0f, 180.0f, 165.0f, 220.0f, leftSpectrum, 64, cuif_rgba(0.0f, 0.75f, 0.70f, 0.8f));
-    analyzerRight = cuif_widget_create_analyzer(605.0f, 180.0f, 165.0f, 220.0f, rightSpectrum, 64, cuif_rgba(0.85f, 0.65f, 0.15f, 0.6f));
-    cuif_widget_add_child(rootContainer, analyzerLeft);
-    cuif_widget_add_child(rootContainer, analyzerRight);
-
-    /* 6. Add Post-EQ Gain Knobs */
-    knobs[kParamPostEqLowGain] = cuif_widget_create_knob(50.0f, 420.0f, 70.0f, 70.0f, "Low EQ", 0.5f, knobChangedCallback);
-    knobs[kParamPostEqMidGain] = cuif_widget_create_knob(140.0f, 420.0f, 70.0f, 70.0f, "Mid EQ", 0.5f, knobChangedCallback);
-    knobs[kParamPostEqHighGain] = cuif_widget_create_knob(230.0f, 420.0f, 70.0f, 70.0f, "High EQ", 0.5f, knobChangedCallback);
-
-    /* 7. Add Crossover Freq Knobs */
-    knobs[kParamCrossoverLowMid] = cuif_widget_create_knob(320.0f, 420.0f, 70.0f, 70.0f, "Xover Low", 0.16f, knobChangedCallback);
-    knobs[kParamCrossoverMidHigh] = cuif_widget_create_knob(410.0f, 420.0f, 70.0f, 70.0f, "Xover High", 0.33f, knobChangedCallback);
-
-    /* 8. Add Ducking Knobs */
-    knobs[kParamDuckThreshold] = cuif_widget_create_knob(500.0f, 420.0f, 70.0f, 70.0f, "Duck Thresh", 1.0f, knobChangedCallback);
-    knobs[kParamDuckAmount] = cuif_widget_create_knob(590.0f, 420.0f, 70.0f, 70.0f, "Duck Depth", 0.0f, knobChangedCallback);
-    knobs[kParamDuckRelease] = cuif_widget_create_knob(680.0f, 420.0f, 70.0f, 70.0f, "Duck Rel", 0.2f, knobChangedCallback);
-
-    /* 9. Add Gate Knobs */
-    knobs[kParamGateThreshold] = cuif_widget_create_knob(500.0f, 510.0f, 70.0f, 70.0f, "Gate Thresh", 0.0f, knobChangedCallback);
-    knobs[kParamGateTime] = cuif_widget_create_knob(590.0f, 510.0f, 70.0f, 70.0f, "Gate Time", 0.2f, knobChangedCallback);
-
-    for (int i = kParamPostEqLowGain; i < kNumParams; ++i) {
-        if (knobs[i]) {
-            knobs[i]->user_data = (void*)(intptr_t)i;
-            cuif_widget_add_child(rootContainer, knobs[i]);
-        }
+    {
+        const auto& r = findRect(layout, "dropdown.mode");
+        modeDropdown = cuif_widget_create_dropdown(r.x, r.y, r.w, r.h, modesList, 5, dropdownChangedCallback);
+        modeDropdown->user_data = (void*)(intptr_t)kParamMode;
+        cuif_widget_add_child(rootContainer, modeDropdown);
     }
+
+    static const char* themesList[] = { "Default", "Hello Kitty", "Greens" };
+    {
+        const auto& r = findRect(layout, "dropdown.theme");
+        themeDropdown = cuif_widget_create_dropdown(r.x, r.y, r.w, r.h, themesList, 3, themeChangedCallback);
+        themeDropdown->user_data = (void*)(intptr_t)kParamUiTheme;
+        cuif_widget_add_child(rootContainer, themeDropdown);
+    }
+
+    {
+        const auto& r = findRect(layout, "button.freeze");
+        freezeButton = cuif_widget_create_button(r.x, r.y, r.w, r.h, "FREEZE", true, buttonClickedCallback);
+        freezeButton->user_data = (void*)(intptr_t)kParamFreeze;
+        cuif_widget_add_child(rootContainer, freezeButton);
+    }
+
+    /* 2. Main tab: hero decay knob, secondary knob row, decay-EQ graph, analyzers */
+    auto addMainKnob = [&](int paramIndex, const char* id, const char* label, float defaultVal) {
+        const auto& r = findRect(layout, id);
+        knobs[paramIndex] = cuif_widget_create_knob(r.x, r.y, r.w, r.h, label, defaultVal, knobChangedCallback);
+        knobs[paramIndex]->user_data = (void*)(intptr_t)paramIndex;
+        cuif_widget_add_child(mainPage, knobs[paramIndex]);
+    };
+
+    addMainKnob(kParamDecayTime, "knob.decayTime", "Decay Time", 0.2f);
+    addMainKnob(kParamPreDelay, "knob.preDelay", "Pre-Delay", 0.15f);
+    addMainKnob(kParamDamping, "knob.damping", "Damping", 0.3f);
+    addMainKnob(kParamWidth, "knob.width", "Width", 0.8f);
+    addMainKnob(kParamDryWet, "knob.dryWet", "Dry/Wet", 0.4f);
+    addMainKnob(kParamDistance, "knob.distance", "Distance", 0.5f);
+    addMainKnob(kParamThickness, "knob.thickness", "Thickness", 0.5f);
+
+    {
+        const auto& r = findRect(layout, "bezier.decayEq");
+        bezierEditor = cuif_widget_create_bezier_editor(r.x, r.y, r.w, r.h, 3, bezierChangedCallback);
+        bezierEditor->user_data = this;
+        bezierEditor->u.bezier_editor.node_x[0] = 0.1f;
+        bezierEditor->u.bezier_editor.node_x[1] = 0.5f;
+        bezierEditor->u.bezier_editor.node_x[2] = 0.9f;
+        cuif_widget_add_child(mainPage, bezierEditor);
+    }
+
+    {
+        const auto& r = findRect(layout, "analyzer.left");
+        analyzerLeft = cuif_widget_create_analyzer(r.x, r.y, r.w, r.h, leftSpectrum, 64, cuif_rgba(0.0f, 0.75f, 0.70f, 0.8f));
+        cuif_widget_add_child(mainPage, analyzerLeft);
+    }
+    {
+        const auto& r = findRect(layout, "analyzer.right");
+        analyzerRight = cuif_widget_create_analyzer(r.x, r.y, r.w, r.h, rightSpectrum, 64, cuif_rgba(0.85f, 0.65f, 0.15f, 0.6f));
+        cuif_widget_add_child(mainPage, analyzerRight);
+    }
+
+    /* 3. Advanced tab: post EQ, crossover, ducking, gate */
+    auto addAdvancedKnob = [&](int paramIndex, const char* id, const char* label, float defaultVal) {
+        const auto& r = findRect(layout, id);
+        knobs[paramIndex] = cuif_widget_create_knob(r.x, r.y, r.w, r.h, label, defaultVal, knobChangedCallback);
+        knobs[paramIndex]->user_data = (void*)(intptr_t)paramIndex;
+        cuif_widget_add_child(advancedPage, knobs[paramIndex]);
+    };
+
+    addAdvancedKnob(kParamPostEqLowGain, "knob.postEqLowGain", "Low EQ", 0.5f);
+    addAdvancedKnob(kParamPostEqMidGain, "knob.postEqMidGain", "Mid EQ", 0.5f);
+    addAdvancedKnob(kParamPostEqHighGain, "knob.postEqHighGain", "High EQ", 0.5f);
+    addAdvancedKnob(kParamCrossoverLowMid, "knob.crossoverLowMid", "Xover Low", 0.16f);
+    addAdvancedKnob(kParamCrossoverMidHigh, "knob.crossoverMidHigh", "Xover High", 0.33f);
+    addAdvancedKnob(kParamDuckThreshold, "knob.duckThreshold", "Duck Thresh", 1.0f);
+    addAdvancedKnob(kParamDuckAmount, "knob.duckAmount", "Duck Depth", 0.0f);
+    addAdvancedKnob(kParamDuckRelease, "knob.duckRelease", "Duck Rel", 0.2f);
+    addAdvancedKnob(kParamGateThreshold, "knob.gateThreshold", "Gate Thresh", 0.0f);
+    addAdvancedKnob(kParamGateTime, "knob.gateTime", "Gate Time", 0.2f);
 
     cuif_window_set_root_widget(myWindow, rootContainer);
     syncUIFromProcessor();

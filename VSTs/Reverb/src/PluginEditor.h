@@ -19,6 +19,13 @@ public:
 
     LoudioReverbProcessor& processorRef;
 
+    /*
+     * Touched from free-function widget callbacks (tabChangedCallback), same
+     * as processorRef above -- not part of the class's own public API.
+     */
+    cuif_widget* mainPage = nullptr;
+    cuif_widget* advancedPage = nullptr;
+
 private:
     void ensureCuifWindowCreated();
 
@@ -30,6 +37,7 @@ private:
     cuif_widget* freezeButton = nullptr;
     cuif_widget* modeDropdown = nullptr;
     cuif_widget* themeDropdown = nullptr;
+    cuif_widget* tabBar = nullptr;
     cuif_widget* bezierEditor = nullptr;
     cuif_widget* analyzerLeft = nullptr;
     cuif_widget* analyzerRight = nullptr;
