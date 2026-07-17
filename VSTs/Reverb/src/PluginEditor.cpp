@@ -134,104 +134,118 @@ void LoudioReverbEditor::paint(juce::Graphics& g) {
     g.fillAll(juce::Colours::black);
 }
 
-void LoudioReverbEditor::resized() {
-    if (myWindow == nullptr) {
-        void* parentHandle = getWindowHandle();
-        if (parentHandle != nullptr) {
-            cuif_window_desc desc = { 0 };
-            desc.title = "Reverb Panel";
-            desc.width = getWidth();
-            desc.height = getHeight();
-            desc.parent_native_handle = parentHandle;
+/*
+ * getWindowHandle() returns null until this Component has an actual native
+ * peer -- which is not yet true during the constructor's setSize() call
+ * (the JUCE plugin wrapper attaches the peer afterwards). resized() only
+ * fires once in Standalone/most hosts with no further size change, so
+ * gating window creation there alone left it permanently null (issue #62).
+ * This is called every timer tick instead, and is a no-op once myWindow is set.
+ */
+void LoudioReverbEditor::ensureCuifWindowCreated() {
+    if (myWindow != nullptr) return;
 
-            myWindow = cuif_window_create(&desc);
-            if (myWindow != nullptr) {
-                /* Initialize global font if not already set */
-                extern cuif_font* cuif_global_font;
-                if (cuif_global_font == nullptr) {
-                    cuif_global_font = cuif_font_load("C:\\Windows\\Fonts\\arial.ttf", 13.0f);
-                }
+    void* parentHandle = getWindowHandle();
+    if (parentHandle == nullptr) return;
 
-                rootContainer = cuif_widget_create_container(0.0f, 0.0f, (float)getWidth(), (float)getHeight());
-                rootContainer->user_data = this;
+    cuif_window_desc desc = { 0 };
+    desc.title = "Reverb Panel";
+    desc.width = getWidth();
+    desc.height = getHeight();
+    desc.parent_native_handle = parentHandle;
 
-                /* 1. Add Rotary Knobs (X, Y, W, H, Label, DefaultValue, ChangeCallback) */
-                knobs[kParamPreDelay] = cuif_widget_create_knob(30.0f, 70.0f, 70.0f, 70.0f, "Pre-Delay", 0.15f, knobChangedCallback);
-                knobs[kParamDecayTime] = cuif_widget_create_knob(120.0f, 70.0f, 70.0f, 70.0f, "Decay Time", 0.2f, knobChangedCallback);
-                knobs[kParamDamping] = cuif_widget_create_knob(210.0f, 70.0f, 70.0f, 70.0f, "Damping", 0.3f, knobChangedCallback);
-                knobs[kParamWidth] = cuif_widget_create_knob(300.0f, 70.0f, 70.0f, 70.0f, "Width", 0.8f, knobChangedCallback);
-                knobs[kParamDryWet] = cuif_widget_create_knob(390.0f, 70.0f, 70.0f, 70.0f, "Dry/Wet", 0.4f, knobChangedCallback);
-                knobs[kParamDistance] = cuif_widget_create_knob(480.0f, 70.0f, 70.0f, 70.0f, "Distance", 0.5f, knobChangedCallback);
-                knobs[kParamThickness] = cuif_widget_create_knob(570.0f, 70.0f, 70.0f, 70.0f, "Thickness", 0.5f, knobChangedCallback);
+    myWindow = cuif_window_create(&desc);
+    if (myWindow == nullptr) return;
 
-                for (int i = 0; i <= kParamThickness; ++i) {
-                    if (knobs[i]) {
-                        knobs[i]->user_data = (void*)(intptr_t)i;
-                        cuif_widget_add_child(rootContainer, knobs[i]);
-                    }
-                }
+    /* Initialize global font if not already set */
+    extern cuif_font* cuif_global_font;
+    if (cuif_global_font == nullptr) {
+        cuif_global_font = cuif_font_load("C:\\Windows\\Fonts\\arial.ttf", 13.0f);
+    }
 
-                /* 2. Add Freeze Toggle Button */
-                freezeButton = cuif_widget_create_button(680.0f, 85.0f, 80.0f, 30.0f, "FREEZE", true, buttonClickedCallback);
-                freezeButton->user_data = (void*)(intptr_t)kParamFreeze;
-                cuif_widget_add_child(rootContainer, freezeButton);
+    rootContainer = cuif_widget_create_container(0.0f, 0.0f, (float)getWidth(), (float)getHeight());
+    rootContainer->user_data = this;
 
-                /* 3. Add Mode Choice Dropdown */
-                static const char* modesList[] = { "Room", "Hall", "Plate", "Cathedral", "Spring" };
-                modeDropdown = cuif_widget_create_dropdown(650.0f, 15.0f, 120.0f, 30.0f, modesList, 5, dropdownChangedCallback);
-                modeDropdown->user_data = (void*)(intptr_t)kParamMode;
-                cuif_widget_add_child(rootContainer, modeDropdown);
+    /* 1. Add Rotary Knobs (X, Y, W, H, Label, DefaultValue, ChangeCallback) */
+    knobs[kParamPreDelay] = cuif_widget_create_knob(30.0f, 70.0f, 70.0f, 70.0f, "Pre-Delay", 0.15f, knobChangedCallback);
+    knobs[kParamDecayTime] = cuif_widget_create_knob(120.0f, 70.0f, 70.0f, 70.0f, "Decay Time", 0.2f, knobChangedCallback);
+    knobs[kParamDamping] = cuif_widget_create_knob(210.0f, 70.0f, 70.0f, 70.0f, "Damping", 0.3f, knobChangedCallback);
+    knobs[kParamWidth] = cuif_widget_create_knob(300.0f, 70.0f, 70.0f, 70.0f, "Width", 0.8f, knobChangedCallback);
+    knobs[kParamDryWet] = cuif_widget_create_knob(390.0f, 70.0f, 70.0f, 70.0f, "Dry/Wet", 0.4f, knobChangedCallback);
+    knobs[kParamDistance] = cuif_widget_create_knob(480.0f, 70.0f, 70.0f, 70.0f, "Distance", 0.5f, knobChangedCallback);
+    knobs[kParamThickness] = cuif_widget_create_knob(570.0f, 70.0f, 70.0f, 70.0f, "Thickness", 0.5f, knobChangedCallback);
 
-                /* 4. Add Bezier EQ Node Editor */
-                bezierEditor = cuif_widget_create_bezier_editor(30.0f, 180.0f, 340.0f, 220.0f, 3, bezierChangedCallback);
-                bezierEditor->user_data = this;
-                /* Anchor horizontal coordinates */
-                bezierEditor->u.bezier_editor.node_x[0] = 0.1f;
-                bezierEditor->u.bezier_editor.node_x[1] = 0.5f;
-                bezierEditor->u.bezier_editor.node_x[2] = 0.9f;
-                cuif_widget_add_child(rootContainer, bezierEditor);
-
-                /* 5. Add Stereo Spectrogram Visualizers */
-                analyzerLeft = cuif_widget_create_analyzer(430.0f, 180.0f, 340.0f, 220.0f, leftSpectrum, 64, cuif_rgba(0.0f, 0.75f, 0.70f, 0.8f));
-                analyzerRight = cuif_widget_create_analyzer(430.0f, 180.0f, 340.0f, 220.0f, rightSpectrum, 64, cuif_rgba(0.85f, 0.65f, 0.15f, 0.6f));
-                cuif_widget_add_child(rootContainer, analyzerLeft);
-                cuif_widget_add_child(rootContainer, analyzerRight);
-
-                /* 6. Add Post-EQ Gain Knobs */
-                knobs[kParamPostEqLowGain] = cuif_widget_create_knob(50.0f, 420.0f, 70.0f, 70.0f, "Low EQ", 0.5f, knobChangedCallback);
-                knobs[kParamPostEqMidGain] = cuif_widget_create_knob(140.0f, 420.0f, 70.0f, 70.0f, "Mid EQ", 0.5f, knobChangedCallback);
-                knobs[kParamPostEqHighGain] = cuif_widget_create_knob(230.0f, 420.0f, 70.0f, 70.0f, "High EQ", 0.5f, knobChangedCallback);
-
-                /* 7. Add Crossover Freq Knobs */
-                knobs[kParamCrossoverLowMid] = cuif_widget_create_knob(320.0f, 420.0f, 70.0f, 70.0f, "Xover Low", 0.16f, knobChangedCallback);
-                knobs[kParamCrossoverMidHigh] = cuif_widget_create_knob(410.0f, 420.0f, 70.0f, 70.0f, "Xover High", 0.33f, knobChangedCallback);
-
-                /* 8. Add Ducking Knobs */
-                knobs[kParamDuckThreshold] = cuif_widget_create_knob(500.0f, 420.0f, 70.0f, 70.0f, "Duck Thresh", 1.0f, knobChangedCallback);
-                knobs[kParamDuckAmount] = cuif_widget_create_knob(590.0f, 420.0f, 70.0f, 70.0f, "Duck Depth", 0.0f, knobChangedCallback);
-                knobs[kParamDuckRelease] = cuif_widget_create_knob(680.0f, 420.0f, 70.0f, 70.0f, "Duck Rel", 0.2f, knobChangedCallback);
-
-                /* 9. Add Gate Knobs */
-                knobs[kParamGateThreshold] = cuif_widget_create_knob(500.0f, 510.0f, 70.0f, 70.0f, "Gate Thresh", 0.0f, knobChangedCallback);
-                knobs[kParamGateTime] = cuif_widget_create_knob(590.0f, 510.0f, 70.0f, 70.0f, "Gate Time", 0.2f, knobChangedCallback);
-
-                for (int i = kParamPostEqLowGain; i < kNumParams; ++i) {
-                    if (knobs[i]) {
-                        knobs[i]->user_data = (void*)(intptr_t)i;
-                        cuif_widget_add_child(rootContainer, knobs[i]);
-                    }
-                }
-
-                cuif_window_set_root_widget(myWindow, rootContainer);
-                syncUIFromProcessor();
-
-                HWND childHwnd = (HWND)cuif_window_native_handle(myWindow);
-                if (childHwnd != NULL) {
-                    MoveWindow(childHwnd, 0, 0, getWidth(), getHeight(), TRUE);
-                }
-            }
+    for (int i = 0; i <= kParamThickness; ++i) {
+        if (knobs[i]) {
+            knobs[i]->user_data = (void*)(intptr_t)i;
+            cuif_widget_add_child(rootContainer, knobs[i]);
         }
-    } else {
+    }
+
+    /* 2. Add Freeze Toggle Button */
+    freezeButton = cuif_widget_create_button(680.0f, 85.0f, 80.0f, 30.0f, "FREEZE", true, buttonClickedCallback);
+    freezeButton->user_data = (void*)(intptr_t)kParamFreeze;
+    cuif_widget_add_child(rootContainer, freezeButton);
+
+    /* 3. Add Mode Choice Dropdown */
+    static const char* modesList[] = { "Room", "Hall", "Plate", "Cathedral", "Spring" };
+    modeDropdown = cuif_widget_create_dropdown(650.0f, 15.0f, 120.0f, 30.0f, modesList, 5, dropdownChangedCallback);
+    modeDropdown->user_data = (void*)(intptr_t)kParamMode;
+    cuif_widget_add_child(rootContainer, modeDropdown);
+
+    /* 4. Add Bezier EQ Node Editor */
+    bezierEditor = cuif_widget_create_bezier_editor(30.0f, 180.0f, 340.0f, 220.0f, 3, bezierChangedCallback);
+    bezierEditor->user_data = this;
+    /* Anchor horizontal coordinates */
+    bezierEditor->u.bezier_editor.node_x[0] = 0.1f;
+    bezierEditor->u.bezier_editor.node_x[1] = 0.5f;
+    bezierEditor->u.bezier_editor.node_x[2] = 0.9f;
+    cuif_widget_add_child(rootContainer, bezierEditor);
+
+    /* 5. Add Stereo Spectrogram Visualizers */
+    analyzerLeft = cuif_widget_create_analyzer(430.0f, 180.0f, 165.0f, 220.0f, leftSpectrum, 64, cuif_rgba(0.0f, 0.75f, 0.70f, 0.8f));
+    analyzerRight = cuif_widget_create_analyzer(605.0f, 180.0f, 165.0f, 220.0f, rightSpectrum, 64, cuif_rgba(0.85f, 0.65f, 0.15f, 0.6f));
+    cuif_widget_add_child(rootContainer, analyzerLeft);
+    cuif_widget_add_child(rootContainer, analyzerRight);
+
+    /* 6. Add Post-EQ Gain Knobs */
+    knobs[kParamPostEqLowGain] = cuif_widget_create_knob(50.0f, 420.0f, 70.0f, 70.0f, "Low EQ", 0.5f, knobChangedCallback);
+    knobs[kParamPostEqMidGain] = cuif_widget_create_knob(140.0f, 420.0f, 70.0f, 70.0f, "Mid EQ", 0.5f, knobChangedCallback);
+    knobs[kParamPostEqHighGain] = cuif_widget_create_knob(230.0f, 420.0f, 70.0f, 70.0f, "High EQ", 0.5f, knobChangedCallback);
+
+    /* 7. Add Crossover Freq Knobs */
+    knobs[kParamCrossoverLowMid] = cuif_widget_create_knob(320.0f, 420.0f, 70.0f, 70.0f, "Xover Low", 0.16f, knobChangedCallback);
+    knobs[kParamCrossoverMidHigh] = cuif_widget_create_knob(410.0f, 420.0f, 70.0f, 70.0f, "Xover High", 0.33f, knobChangedCallback);
+
+    /* 8. Add Ducking Knobs */
+    knobs[kParamDuckThreshold] = cuif_widget_create_knob(500.0f, 420.0f, 70.0f, 70.0f, "Duck Thresh", 1.0f, knobChangedCallback);
+    knobs[kParamDuckAmount] = cuif_widget_create_knob(590.0f, 420.0f, 70.0f, 70.0f, "Duck Depth", 0.0f, knobChangedCallback);
+    knobs[kParamDuckRelease] = cuif_widget_create_knob(680.0f, 420.0f, 70.0f, 70.0f, "Duck Rel", 0.2f, knobChangedCallback);
+
+    /* 9. Add Gate Knobs */
+    knobs[kParamGateThreshold] = cuif_widget_create_knob(500.0f, 510.0f, 70.0f, 70.0f, "Gate Thresh", 0.0f, knobChangedCallback);
+    knobs[kParamGateTime] = cuif_widget_create_knob(590.0f, 510.0f, 70.0f, 70.0f, "Gate Time", 0.2f, knobChangedCallback);
+
+    for (int i = kParamPostEqLowGain; i < kNumParams; ++i) {
+        if (knobs[i]) {
+            knobs[i]->user_data = (void*)(intptr_t)i;
+            cuif_widget_add_child(rootContainer, knobs[i]);
+        }
+    }
+
+    cuif_window_set_root_widget(myWindow, rootContainer);
+    syncUIFromProcessor();
+
+    HWND childHwnd = (HWND)cuif_window_native_handle(myWindow);
+    if (childHwnd != NULL) {
+        MoveWindow(childHwnd, 0, 0, getWidth(), getHeight(), TRUE);
+    }
+}
+
+void LoudioReverbEditor::resized() {
+    ensureCuifWindowCreated();
+
+    if (myWindow != nullptr) {
         HWND childHwnd = (HWND)cuif_window_native_handle(myWindow);
         if (childHwnd != NULL) {
             MoveWindow(childHwnd, 0, 0, getWidth(), getHeight(), TRUE);
@@ -240,6 +254,8 @@ void LoudioReverbEditor::resized() {
 }
 
 void LoudioReverbEditor::timerCallback() {
+    ensureCuifWindowCreated();
+
     if (myWindow != nullptr) {
         pollSpectrumData();
         cuif_window_pump(myWindow);

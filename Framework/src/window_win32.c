@@ -308,8 +308,29 @@ void cuif_window_render_frame(cuif_window* window) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+    /*
+     * Always clear to a defined background color first -- without this,
+     * undrawn regions show whatever the swap buffer previously contained
+     * (observed as a solid black editor when nothing else painted every
+     * pixel). See issue #62.
+     */
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
     if (window->render_fn) {
         window->render_fn(window, window->render_user_data);
+    }
+
+    /*
+     * Auto-render the widget tree if one was registered via
+     * cuif_window_set_root_widget(). Previously the only way to get pixels
+     * on screen was to also call cuif_window_set_render_callback() by hand
+     * (as the standalone cuif_harness test does), which the plugin editor
+     * never did -- the widget tree was built and wired for input dispatch
+     * but never painted. See issue #62.
+     */
+    if (window->root_widget) {
+        cuif_widget_render(window->root_widget);
     }
 
     SwapBuffers(window->hdc);
