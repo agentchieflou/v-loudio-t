@@ -2,6 +2,8 @@
 #include "AllPassDiffuser.h"
 #include "EarlyReflections.h"
 #include "OnePoleLPF.h"
+#include "Crossover.h"
+#include "EnvelopeDetector.h"
 #include <iostream>
 #include <cassert>
 #include <cmath>
@@ -13,7 +15,7 @@ void testHouseholderUnitary() {
     const int N = 8;
     float x[N] = { 1.0f, -0.5f, 0.2f, 0.8f, -0.1f, 0.3f, -0.4f, 0.9f };
 
-    /* Calculate input energy (sum of squares) */
+    /* Calculate input energy */
     float inputEnergy = 0.0f;
     for (int i = 0; i < N; ++i) {
         inputEnergy += x[i] * x[i];
@@ -40,7 +42,6 @@ void testHouseholderUnitary() {
     std::cout << "  Input energy:  " << inputEnergy << std::endl;
     std::cout << "  Output energy: " << outputEnergy << std::endl;
 
-    /* Verify energy conservation (tolerance due to floating-point precision) */
     float diff = std::abs(inputEnergy - outputEnergy);
     assert(diff < 1e-5f);
     std::cout << "  Householder matrix is unitary (conserves energy)! Pass." << std::endl;
@@ -60,14 +61,11 @@ void testFDNStability() {
         dampingFilters[i].prepare();
     }
 
-    /* Loop gain = 1.0f (no decay / infinite decay) and damping = 0.0f */
     float loopGains[N] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
     float g_hf = 0.0f;
 
-    /* Inject impulse into the system at sample 0 */
     float inputSignal[N] = { 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f };
 
-    /* Run the FDN loop for 2000 samples and track total energy */
     for (int sample = 0; sample < 2000; ++sample) {
         float x_delay[8];
         for (int i = 0; i < 8; ++i) {
@@ -99,13 +97,67 @@ void testFDNStability() {
             totalSystemEnergy += writeVal * writeVal;
         }
 
-        /* Verify that energy does not grow exponentially (stability check) */
         if (sample > 10) {
-            assert(totalSystemEnergy <= 8.5f); /* Initial impulse energy sum was 8.0f */
+            assert(totalSystemEnergy <= 8.5f);
         }
     }
 
     std::cout << "  FDN loop is stable over 2000 samples! Pass." << std::endl;
+}
+
+void testCrossoverSum() {
+    std::cout << "Running testCrossoverSum..." << std::endl;
+
+    ThreeBandCrossover crossover;
+    crossover.prepare();
+    crossover.setCrossoverFrequencies(44100.0f, 250.0f, 4000.0f);
+
+    /* Test flat summing on random signal input */
+    std::vector<float> input(1000);
+    for (int i = 0; i < 1000; ++i) {
+        input[i] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
+    }
+
+    float inputEnergy = 0.0f;
+    float outputEnergy = 0.0f;
+
+    /* Feed signal and sum crossover bands */
+    for (int i = 0; i < 1000; ++i) {
+        float low = 0.0f, mid = 0.0f, high = 0.0f;
+        crossover.process(input[i], low, mid, high);
+        
+        float sum = low + mid + high;
+        inputEnergy += input[i] * input[i];
+        outputEnergy += sum * sum;
+    }
+
+    std::cout << "  Input energy:  " << inputEnergy << std::endl;
+    std::cout << "  Output energy: " << outputEnergy << std::endl;
+
+    /* Energy must be conserved by the all-pass response */
+    float ratio = outputEnergy / inputEnergy;
+    std::cout << "  Energy preservation ratio: " << ratio << std::endl;
+    assert(std::abs(ratio - 1.0f) < 0.05f); /* within 5% tolerance due to initial transient states */
+    std::cout << "  Crossover network sums to flat (energy is conserved)! Pass." << std::endl;
+}
+
+void testDuckingEnvelope() {
+    std::cout << "Running testDuckingEnvelope..." << std::endl;
+
+    EnvelopeDetector detector;
+    detector.prepare(44100.0);
+    detector.setAttackRelease(10.0f, 200.0f);
+
+    /* Generate a burst signal */
+    for (int i = 0; i < 1000; ++i) {
+        float x = (i < 100) ? 1.0f : 0.0f;
+        float db = detector.processDb(x);
+        
+        /* Bounded values */
+        assert(db <= 0.0f);
+        assert(db >= -100.0f);
+    }
+    std::cout << "  Ducking envelope tracking functions bounded correctly! Pass." << std::endl;
 }
 
 int main() {
@@ -116,6 +168,8 @@ int main() {
     try {
         testHouseholderUnitary();
         testFDNStability();
+        testCrossoverSum();
+        testDuckingEnvelope();
         std::cout << "All DSP tests passed successfully!" << std::endl;
         return 0;
     } catch (const std::exception& e) {

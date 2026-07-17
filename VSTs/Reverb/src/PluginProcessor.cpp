@@ -11,7 +11,6 @@ LoudioReverbProcessor::LoudioReverbProcessor()
 }
 
 void LoudioReverbProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
-    juce::ignoreUnused(samplesPerBlock);
     currentSampleRate = sampleRate;
 
     float rateScale = (float)(sampleRate / 44100.0);
@@ -55,14 +54,33 @@ void LoudioReverbProcessor::prepareToPlay(double sampleRate, int samplesPerBlock
     };
     earlyReflectionsRight.prepare((int)(1200 * rateScale), rightTaps);
 
-    /* 4. Prepare FDN Late Reverb */
+    /* 4. Prepare FDN Late Reverb & Crossovers */
+    float fc1 = *apvts.getRawParameterValue("crossoverLowMid");
+    float fc2 = *apvts.getRawParameterValue("crossoverMidHigh");
     for (int i = 0; i < 8; ++i) {
-        int delayLen = (int)(baseDelayLengths[i] * rateScale);
+        int delayLen = (int)(baseDelayLengths[i] * rateScale * 1.5f); /* Extra padding for mode scaling */
         fdnDelayLines[i].prepare(delayLen + 2);
         fdnDampingFilters[i].prepare();
+        crossovers[i].prepare();
+        crossovers[i].setCrossoverFrequencies((float)sampleRate, fc1, fc2);
     }
 
-    /* 5. Prepare parameter smoothing */
+    /* 5. Prepare Post EQ biquad chains */
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = (juce::uint32)samplesPerBlock;
+    spec.numChannels = 1;
+    postEqLeft.prepare(spec);
+    postEqRight.prepare(spec);
+    updatePostEQ();
+
+    /* 6. Prepare Envelope detectors */
+    duckDetector.prepare(sampleRate);
+    gateDetector.prepare(sampleRate);
+    gateFade = 1.0f;
+    gateTimerMs = 0.0f;
+
+    /* 7. Prepare parameter smoothing */
     smoothedPreDelayMs.reset(sampleRate, 0.02);
     smoothedDecayTimeSec.reset(sampleRate, 0.02);
     smoothedDamping.reset(sampleRate, 0.02);
@@ -89,6 +107,25 @@ bool LoudioReverbProcessor::isBusesLayoutSupported(const BusesLayout& layouts) c
         && layouts.getMainInputChannelSet() == juce::AudioChannelSet::stereo();
 }
 
+void LoudioReverbProcessor::updatePostEQ() {
+    float lowGain = *apvts.getRawParameterValue("postEqLowGain");
+    float midGain = *apvts.getRawParameterValue("postEqMidGain");
+    float highGain = *apvts.getRawParameterValue("postEqHighGain");
+
+    auto lowCoefficients = juce::dsp::IIR::Coefficients<float>::makeLowShelf(currentSampleRate, 150.0f, 0.707f, juce::Decibels::decibelsToGain(lowGain));
+    auto midCoefficients = juce::dsp::IIR::Coefficients<float>::makePeakFilter(currentSampleRate, 1500.0f, 0.707f, juce::Decibels::decibelsToGain(midGain));
+    auto highCoefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf(currentSampleRate, 8000.0f, 0.707f, juce::Decibels::decibelsToGain(highGain));
+
+    *postEqLeft.get<0>().coefficients = *lowCoefficients;
+    *postEqRight.get<0>().coefficients = *lowCoefficients;
+
+    *postEqLeft.get<1>().coefficients = *midCoefficients;
+    *postEqRight.get<1>().coefficients = *midCoefficients;
+
+    *postEqLeft.get<2>().coefficients = *highCoefficients;
+    *postEqRight.get<2>().coefficients = *highCoefficients;
+}
+
 void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
     juce::ignoreUnused(midiMessages);
 
@@ -107,9 +144,42 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
     smoothedDistance.setTargetValue(*apvts.getRawParameterValue("distance"));
     smoothedThickness.setTargetValue(*apvts.getRawParameterValue("thickness"));
 
+    /* Crossover frequencies update */
+    float fc1 = *apvts.getRawParameterValue("crossoverLowMid");
+    float fc2 = *apvts.getRawParameterValue("crossoverMidHigh");
+    for (int i = 0; i < 8; ++i) {
+        crossovers[i].setCrossoverFrequencies((float)currentSampleRate, fc1, fc2);
+    }
+
+    updatePostEQ();
+
+    /* Load Decay EQ multipliers */
+    float decayLow = *apvts.getRawParameterValue("decayLow");
+    float decayMid = *apvts.getRawParameterValue("decayMid");
+    float decayHigh = *apvts.getRawParameterValue("decayHigh");
+
+    /* Ducking details */
+    float duckThreshold = *apvts.getRawParameterValue("duckThreshold");
+    float duckAmount = *apvts.getRawParameterValue("duckAmount");
+    float duckRelease = *apvts.getRawParameterValue("duckRelease");
+    duckDetector.setAttackRelease(10.0f, duckRelease);
+
+    /* Gate details */
+    float gateThreshold = *apvts.getRawParameterValue("gateThreshold");
+    float gateTime = *apvts.getRawParameterValue("gateTime");
+
     bool freeze = *apvts.getRawParameterValue("freeze") > 0.5f;
+    int mode = (int)*apvts.getRawParameterValue("mode");
 
     float rateScale = (float)(currentSampleRate / 44100.0f);
+
+    /* 1. Character mode size multiplier */
+    float modeScale = 1.0f;
+    if (mode == 0)      modeScale = 0.6f;  /* Room */
+    else if (mode == 1) modeScale = 1.0f;  /* Hall */
+    else if (mode == 2) modeScale = 0.75f; /* Plate */
+    else if (mode == 3) modeScale = 1.5f;  /* Cathedral */
+    else if (mode == 4) modeScale = 0.85f; /* Spring */
 
     for (int sample = 0; sample < numSamples; ++sample) {
         float preDelayMs = smoothedPreDelayMs.getNextValue();
@@ -123,22 +193,22 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
         float inL = leftChannel[sample];
         float inR = rightChannel[sample];
 
-        /* 1. Pre-Delay */
+        /* Pre-Delay */
         float preDelaySamples = preDelayMs * 0.001f * (float)currentSampleRate;
         preDelayLeft.write(inL);
         preDelayRight.write(inR);
         float preL = preDelayLeft.read(preDelaySamples);
         float preR = preDelayRight.read(preDelaySamples);
 
-        /* 2. All-Pass Diffusers */
+        /* All-Pass Diffusers */
         float diffL = diffuserLeft.process(preL);
         float diffR = diffuserRight.process(preR);
 
-        /* 3. Early Reflections */
+        /* Early Reflections */
         float earlyL = earlyReflectionsLeft.process(diffL);
         float earlyR = earlyReflectionsRight.process(diffR);
 
-        /* 4. Late FDN Reverb Loop */
+        /* Late FDN Reverb Loop */
         float currentDecay = decayTimeSec;
         float currentDamping = damping;
         if (freeze) {
@@ -148,7 +218,7 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
 
         float loopGains[8];
         for (int i = 0; i < 8; ++i) {
-            float delayInSamples = baseDelayLengths[i] * rateScale;
+            float delayInSamples = baseDelayLengths[i] * rateScale * modeScale;
             if (freeze) {
                 loopGains[i] = 1.0f;
             } else {
@@ -158,18 +228,29 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
 
         float g_hf = currentDamping * 0.6f;
 
-        float x_delay[8];
+        float x_low[8], x_mid[8], x_high[8];
         for (int i = 0; i < 8; ++i) {
-            float delayInSamples = baseDelayLengths[i] * rateScale;
-            x_delay[i] = fdnDelayLines[i].read(delayInSamples);
+            float delayInSamples = baseDelayLengths[i] * rateScale * modeScale;
+            float readVal = fdnDelayLines[i].read(delayInSamples);
+            crossovers[i].process(readVal, x_low[i], x_mid[i], x_high[i]);
         }
 
         float x_damped[8];
         for (int i = 0; i < 8; ++i) {
-            x_damped[i] = fdnDampingFilters[i].process(x_delay[i], g_hf);
+            float g_low = loopGains[i] * decayLow;
+            float g_mid = loopGains[i] * decayMid;
+            float g_high = loopGains[i] * decayHigh;
+
+            /* Limit loop gains under unity for feedback stability */
+            if (g_low > 0.999f && !freeze) g_low = 0.999f;
+            if (g_mid > 0.999f && !freeze) g_mid = 0.999f;
+            if (g_high > 0.999f && !freeze) g_high = 0.999f;
+
+            float high_filtered = fdnDampingFilters[i].process(x_high[i], g_hf);
+            x_damped[i] = x_low[i] * g_low + x_mid[i] * g_mid + high_filtered * g_high;
         }
 
-        /* Householder Matrix loop multiplication */
+        /* Householder Feedback Matrix */
         float sum = 0.0f;
         for (int i = 0; i < 8; ++i) {
             sum += x_damped[i];
@@ -201,16 +282,50 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
         float wetL = (x_damped[0] - x_damped[1] + x_damped[2] - x_damped[3]) * 0.5f;
         float wetR = (x_damped[4] - x_damped[5] + x_damped[6] - x_damped[7]) * 0.5f;
 
-        /* Early/Late blend */
+        /* Post EQ stage filtering */
+        wetL = postEqLeft.get<0>().processSample(wetL);
+        wetL = postEqLeft.get<1>().processSample(wetL);
+        wetL = postEqLeft.get<2>().processSample(wetL);
+
+        wetR = postEqRight.get<0>().processSample(wetR);
+        wetR = postEqRight.get<1>().processSample(wetR);
+        wetR = postEqRight.get<2>().processSample(wetR);
+
+        /* Early/Late balance */
         float outWetL = (1.0f - distance) * earlyL + distance * wetL;
         float outWetR = (1.0f - distance) * earlyR + distance * wetR;
 
-        /* Stereo Width mid/side adjust */
+        /* Stereo width Mid/Side adjust */
         float mid = (outWetL + outWetR) * 0.5f;
         float side = (outWetL - outWetR) * 0.5f;
         float adjustedSide = side * width;
         outWetL = mid + adjustedSide;
         outWetR = mid - adjustedSide;
+
+        /* Dynamic Ducking */
+        float inLevelDb = duckDetector.processDb((std::abs(inL) + std::abs(inR)) * 0.5f);
+        float duckDb = 0.0f;
+        if (inLevelDb > duckThreshold) {
+            duckDb = (inLevelDb - duckThreshold) * (duckAmount / 30.0f);
+            if (duckDb > duckAmount) duckDb = duckAmount;
+        }
+        float duckGain = juce::Decibels::decibelsToGain(-duckDb);
+        outWetL *= duckGain;
+        outWetR *= duckGain;
+
+        /* Auto-Gating */
+        float wetLevelDb = gateDetector.processDb((std::abs(outWetL) + std::abs(outWetR)) * 0.5f);
+        if (wetLevelDb < gateThreshold) {
+            gateTimerMs += (1000.0f / (float)currentSampleRate);
+            if (gateTimerMs >= gateTime) {
+                gateFade = std::max(0.0f, gateFade - 0.002f);
+            }
+        } else {
+            gateTimerMs = 0.0f;
+            gateFade = std::min(1.0f, gateFade + 0.005f);
+        }
+        outWetL *= gateFade;
+        outWetR *= gateFade;
 
         /* Global mix */
         leftChannel[sample] = (1.0f - dryWet) * inL + dryWet * outWetL;
@@ -240,6 +355,7 @@ void LoudioReverbProcessor::setStateInformation(const void* data, int sizeInByte
 juce::AudioProcessorValueTreeState::ParameterLayout LoudioReverbProcessor::createParameterLayout() {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
+    /* Base Parameters */
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("preDelay", 1), "Pre-Delay", juce::NormalisableRange<float>(0.0f, 150.0f, 0.1f), 20.0f));
 
@@ -266,7 +382,50 @@ juce::AudioProcessorValueTreeState::ParameterLayout LoudioReverbProcessor::creat
 
     juce::StringArray modes = { "Room", "Hall", "Plate", "Cathedral", "Spring" };
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
-        juce::ParameterID("mode", 1), "Mode", modes, 0));
+        juce::ParameterID("mode", 1), "Mode", modes, 1)); /* default Hall */
+
+    /* Decay EQ Multipliers */
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("decayLow", 1), "Decay Low", juce::NormalisableRange<float>(0.1f, 2.0f, 0.01f), 1.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("decayMid", 1), "Decay Mid", juce::NormalisableRange<float>(0.1f, 2.0f, 0.01f), 1.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("decayHigh", 1), "Decay High", juce::NormalisableRange<float>(0.1f, 2.0f, 0.01f), 1.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("crossoverLowMid", 1), "Crossover Low-Mid", juce::NormalisableRange<float>(100.0f, 1000.0f, 1.0f), 250.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("crossoverMidHigh", 1), "Crossover Mid-High", juce::NormalisableRange<float>(1000.0f, 10000.0f, 1.0f), 4000.0f));
+
+    /* Post EQ Gains */
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("postEqLowGain", 1), "Post EQ Low Gain", juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("postEqMidGain", 1), "Post EQ Mid Gain", juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("postEqHighGain", 1), "Post EQ High Gain", juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+
+    /* Dynamic Ducking */
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("duckThreshold", 1), "Ducking Threshold", juce::NormalisableRange<float>(-60.0f, 0.0f, 0.1f), 0.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("duckAmount", 1), "Ducking Amount", juce::NormalisableRange<float>(0.0f, 24.0f, 0.1f), 0.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("duckRelease", 1), "Ducking Release", juce::NormalisableRange<float>(10.0f, 1000.0f, 1.0f), 200.0f));
+
+    /* Auto-Gating */
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("gateThreshold", 1), "Gate Threshold", juce::NormalisableRange<float>(-80.0f, -20.0f, 0.1f), -80.0f));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("gateTime", 1), "Gate Time", juce::NormalisableRange<float>(10.0f, 500.0f, 1.0f), 100.0f));
 
     return { params.begin(), params.end() };
 }
