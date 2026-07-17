@@ -4,6 +4,8 @@
 #include "OnePoleLPF.h"
 #include "Crossover.h"
 #include "EnvelopeDetector.h"
+#include "SharedStructures.h"
+#include "cuif/ring_buffer.h"
 #include <iostream>
 #include <cassert>
 #include <cmath>
@@ -112,7 +114,6 @@ void testCrossoverSum() {
     crossover.prepare();
     crossover.setCrossoverFrequencies(44100.0f, 250.0f, 4000.0f);
 
-    /* Test flat summing on random signal input */
     std::vector<float> input(1000);
     for (int i = 0; i < 1000; ++i) {
         input[i] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
@@ -121,7 +122,6 @@ void testCrossoverSum() {
     float inputEnergy = 0.0f;
     float outputEnergy = 0.0f;
 
-    /* Feed signal and sum crossover bands */
     for (int i = 0; i < 1000; ++i) {
         float low = 0.0f, mid = 0.0f, high = 0.0f;
         crossover.process(input[i], low, mid, high);
@@ -134,10 +134,9 @@ void testCrossoverSum() {
     std::cout << "  Input energy:  " << inputEnergy << std::endl;
     std::cout << "  Output energy: " << outputEnergy << std::endl;
 
-    /* Energy must be conserved by the all-pass response */
     float ratio = outputEnergy / inputEnergy;
     std::cout << "  Energy preservation ratio: " << ratio << std::endl;
-    assert(std::abs(ratio - 1.0f) < 0.05f); /* within 5% tolerance due to initial transient states */
+    assert(std::abs(ratio - 1.0f) < 0.05f);
     std::cout << "  Crossover network sums to flat (energy is conserved)! Pass." << std::endl;
 }
 
@@ -148,16 +147,39 @@ void testDuckingEnvelope() {
     detector.prepare(44100.0);
     detector.setAttackRelease(10.0f, 200.0f);
 
-    /* Generate a burst signal */
     for (int i = 0; i < 1000; ++i) {
         float x = (i < 100) ? 1.0f : 0.0f;
         float db = detector.processDb(x);
         
-        /* Bounded values */
         assert(db <= 0.0f);
         assert(db >= -100.0f);
     }
     std::cout << "  Ducking envelope tracking functions bounded correctly! Pass." << std::endl;
+}
+
+void testParameterRingBuffer() {
+    std::cout << "Running testParameterRingBuffer..." << std::endl;
+
+    cuif_spsc_ring_buffer ringBuffer;
+    unsigned char storage[256];
+    cuif_spsc_init(&ringBuffer, storage, 256);
+
+    ParamUpdateMessage msgWrite = { kParamDecayTime, 4.5f };
+    assert(cuif_spsc_writable(&ringBuffer) >= sizeof(ParamUpdateMessage));
+
+    size_t written = cuif_spsc_write(&ringBuffer, (const unsigned char*)&msgWrite, sizeof(ParamUpdateMessage));
+    assert(written == sizeof(ParamUpdateMessage));
+
+    assert(cuif_spsc_readable(&ringBuffer) == sizeof(ParamUpdateMessage));
+
+    ParamUpdateMessage msgRead = { 0, 0.0f };
+    size_t read_bytes = cuif_spsc_read(&ringBuffer, (unsigned char*)&msgRead, sizeof(ParamUpdateMessage));
+    assert(read_bytes == sizeof(ParamUpdateMessage));
+
+    assert(msgRead.index == kParamDecayTime);
+    assert(std::abs(msgRead.value - 4.5f) < 1e-5f);
+
+    std::cout << "  Parameter message read/write over SPSC ring buffer works perfectly! Pass." << std::endl;
 }
 
 int main() {
@@ -170,6 +192,7 @@ int main() {
         testFDNStability();
         testCrossoverSum();
         testDuckingEnvelope();
+        testParameterRingBuffer();
         std::cout << "All DSP tests passed successfully!" << std::endl;
         return 0;
     } catch (const std::exception& e) {

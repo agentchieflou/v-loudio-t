@@ -7,7 +7,9 @@
 #include "OnePoleLPF.h"
 #include "Crossover.h"
 #include "EnvelopeDetector.h"
-
+#include "FFTAnalyzer.h"
+#include "cuif/ring_buffer.h"
+#include "SharedStructures.h"
 class LoudioReverbProcessor : public juce::AudioProcessor {
 public:
     LoudioReverbProcessor();
@@ -38,6 +40,10 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     juce::AudioProcessorValueTreeState apvts;
 
+    /* Shared SPSC lock-free ring buffers for DSP <-> UI communications */
+    cuif_spsc_ring_buffer dspToUiRingBuffer;
+    cuif_spsc_ring_buffer uiToDspRingBuffer;
+
 private:
     double currentSampleRate = 44100.0;
 
@@ -65,6 +71,13 @@ private:
     float gateTimerMs = 0.0f;
 
     void updatePostEQ();
+
+    FFTAnalyzer fftAnalyzerLeft;
+    FFTAnalyzer fftAnalyzerRight;
+
+    /* Pre-allocated storage for ring buffers (1024 bytes is ample for FIFO data) */
+    unsigned char dspToUiStorage[1024];
+    unsigned char uiToDspStorage[1024];
 
     juce::LinearSmoothedValue<float> smoothedPreDelayMs;
     juce::LinearSmoothedValue<float> smoothedDecayTimeSec;

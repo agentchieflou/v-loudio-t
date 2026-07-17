@@ -26,6 +26,8 @@ target_sources(LoudioReverb PRIVATE
     src/PluginEditor.cpp
 )
 
+target_include_directories(LoudioReverb PRIVATE src ../../Framework/include)
+
 target_compile_definitions(LoudioReverb PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
@@ -45,5 +47,5 @@ PUBLIC
 option(LOUDIO_REVERB_BUILD_TESTS "Build DSP unit tests executable" ON)
 if(LOUDIO_REVERB_BUILD_TESTS)
     add_executable(dsp_tests src/DSPTests.cpp)
-    target_include_directories(dsp_tests PRIVATE src)
+    target_include_directories(dsp_tests PRIVATE src ../../Framework/include)
 endif()
