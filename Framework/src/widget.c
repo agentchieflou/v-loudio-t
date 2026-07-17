@@ -252,13 +252,12 @@ void cuif_widget_render(cuif_widget* w) {
 
             /* Draw label and value text */
             if (cuif_global_font) {
-                float label_len = strlen(w->u.knob.label);
-                float tx = cx - label_len * 3.5f;
+                float tx = cx - cuif_font_measure_text(cuif_global_font, w->u.knob.label) * 0.5f;
                 cuif_draw_text(cuif_global_font, w->u.knob.label, tx, w->y + w->h - 18.0f, text_gray);
-                
+
                 char val_str[16];
                 sprintf_s(val_str, sizeof(val_str), "%.2f", w->u.knob.value);
-                float vx = cx - strlen(val_str) * 3.5f;
+                float vx = cx - cuif_font_measure_text(cuif_global_font, val_str) * 0.5f;
                 cuif_draw_text(cuif_global_font, val_str, vx, w->y + w->h - 4.0f, text_white);
             }
             break;
@@ -299,8 +298,7 @@ void cuif_widget_render(cuif_widget* w) {
             cuif_draw_rounded_rect(w->x, w->y, w->w, w->h, 4.0f, theme_border, false);
             
             if (cuif_global_font) {
-                float label_len = strlen(w->u.button.label);
-                float tx = w->x + (w->w - label_len * 7.0f) * 0.5f;
+                float tx = w->x + (w->w - cuif_font_measure_text(cuif_global_font, w->u.button.label)) * 0.5f;
                 float ty = w->y + (w->h + 10.0f) * 0.5f;
                 cuif_draw_text(cuif_global_font, w->u.button.label, tx, ty, text_white);
             }
@@ -441,8 +439,7 @@ void cuif_widget_render(cuif_widget* w) {
                 }
 
                 if (cuif_global_font && w->u.tabbar.tab_labels && w->u.tabbar.tab_labels[i]) {
-                    float label_len = (float)strlen(w->u.tabbar.tab_labels[i]);
-                    float lx = tx + (tab_w - label_len * 7.0f) * 0.5f;
+                    float lx = tx + (tab_w - cuif_font_measure_text(cuif_global_font, w->u.tabbar.tab_labels[i])) * 0.5f;
                     float ly = w->y + (w->h + 10.0f) * 0.5f;
                     cuif_draw_text(cuif_global_font, w->u.tabbar.tab_labels[i], lx, ly, selected ? text_white : text_gray);
                 }

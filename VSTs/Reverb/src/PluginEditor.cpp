@@ -4,6 +4,9 @@
 #include <cmath>
 #include <cstring>
 
+extern cuif_font* cuif_global_font;
+static constexpr float kFontDesignSizePx = 13.0f;
+
 static float mapParamValueToWidget(int index, float rawVal) {
     switch (index) {
         case kParamPreDelay: return rawVal / 150.0f;
@@ -200,10 +203,15 @@ void LoudioReverbEditor::ensureCuifWindowCreated() {
     myWindow = cuif_window_create(&desc);
     if (myWindow == nullptr) return;
 
-    /* Initialize global font if not already set */
-    extern cuif_font* cuif_global_font;
+    /* Initialize global font if not already set. cuif_font_load() bakes at
+       its own scale=1.0 (per its documented "logical pixels" contract);
+       re-bake immediately below if the actual current scale differs, so
+       text is crisp for the current display from the very first frame. */
     if (cuif_global_font == nullptr) {
-        cuif_global_font = cuif_font_load("C:\\Windows\\Fonts\\arial.ttf", 13.0f);
+        cuif_global_font = cuif_font_load("C:\\Windows\\Fonts\\arial.ttf", kFontDesignSizePx);
+        if (cuif_global_font != nullptr && std::abs(currentDpiScale - 1.0f) > 0.001f) {
+            cuif_font_rebake(cuif_global_font, cuif_font_effective_bake_px(kFontDesignSizePx, currentDpiScale));
+        }
     }
 
     rootContainer = cuif_widget_create_container(0.0f, 0.0f, (float)getWidth(), (float)getHeight());
@@ -347,6 +355,10 @@ void LoudioReverbEditor::updateDpiScale() {
     if (pendingDpiScaleStableTicks == kDpiScaleDebounceTicks && std::abs(pendingDpiScale - currentDpiScale) > 0.001f) {
         currentDpiScale = pendingDpiScale;
         cuif_window_set_dpi_scale(myWindow, currentDpiScale);
+
+        if (cuif_global_font != nullptr) {
+            cuif_font_rebake(cuif_global_font, cuif_font_effective_bake_px(kFontDesignSizePx, currentDpiScale));
+        }
     }
 }
 
