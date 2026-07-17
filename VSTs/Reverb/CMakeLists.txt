@@ -54,6 +54,11 @@ PUBLIC
 
 option(LOUDIO_REVERB_BUILD_TESTS "Build DSP unit tests executable" ON)
 if(LOUDIO_REVERB_BUILD_TESTS)
-    add_executable(dsp_tests src/DSPTests.cpp)
+    add_executable(dsp_tests
+        src/DSPTests.cpp
+        ../../Framework/src/theme.c
+        ../../Framework/src/theme_hello_kitty.c
+        ../../Framework/src/theme_greens.c
+    )
     target_include_directories(dsp_tests PRIVATE src ../../Framework/include)
 endif()

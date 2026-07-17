@@ -29,6 +29,7 @@ private:
     cuif_widget* knobs[kNumParams] = { nullptr };
     cuif_widget* freezeButton = nullptr;
     cuif_widget* modeDropdown = nullptr;
+    cuif_widget* themeDropdown = nullptr;
     cuif_widget* bezierEditor = nullptr;
     cuif_widget* analyzerLeft = nullptr;
     cuif_widget* analyzerRight = nullptr;

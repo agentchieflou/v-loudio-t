@@ -6,6 +6,7 @@
 #include "EnvelopeDetector.h"
 #include "SharedStructures.h"
 #include "cuif/ring_buffer.h"
+#include "ReverbThemeMapping.h"
 #include <iostream>
 #include <cassert>
 #include <cmath>
@@ -182,6 +183,20 @@ void testParameterRingBuffer() {
     std::cout << "  Parameter message read/write over SPSC ring buffer works perfectly! Pass." << std::endl;
 }
 
+void testUiThemeMapping() {
+    std::cout << "Running testUiThemeMapping..." << std::endl;
+
+    assert(themeForUiThemeIndex(0) == &CUIF_THEME_DEFAULT);
+    assert(themeForUiThemeIndex(1) == &CUIF_THEME_HELLO_KITTY);
+    assert(themeForUiThemeIndex(2) == &CUIF_THEME_GREENS);
+
+    /* Out-of-range indices must fail safe to the default theme, not crash or return null. */
+    assert(themeForUiThemeIndex(-1) == &CUIF_THEME_DEFAULT);
+    assert(themeForUiThemeIndex(99) == &CUIF_THEME_DEFAULT);
+
+    std::cout << "  themeForUiThemeIndex() maps the uiTheme parameter's choice index correctly, with a safe fallback. Pass." << std::endl;
+}
+
 int main() {
     std::cout << "==============================" << std::endl;
     std::cout << "Starting Loudio Reverb DSP Tests" << std::endl;
@@ -193,6 +208,7 @@ int main() {
         testCrossoverSum();
         testDuckingEnvelope();
         testParameterRingBuffer();
+        testUiThemeMapping();
         std::cout << "All DSP tests passed successfully!" << std::endl;
         return 0;
     } catch (const std::exception& e) {
