@@ -469,6 +469,41 @@ static void testGlObjectsShareAcrossTwoWindows(void) {
     printf("  A texture created under one window's GL context is valid under another window's context. Pass.\n");
 }
 
+/*
+ * Regression test for #92 (fixes reopen-in-place fuzzy/blank text).
+ * Before this fix, cuif_global_font was left dangling (non-NULL, but its
+ * texture_id pointed at a GL object in a now-destroyed context) after the
+ * last window closed, so ensureCuifWindowCreated()'s "already loaded" guard
+ * skipped reloading it on reopen. This directly exercises the invariant the
+ * plugin editor's guard relies on: cuif_global_font must be NULL whenever
+ * zero windows exist.
+ */
+static void testFontFreedWhenLastWindowCloses(void) {
+    printf("Running testFontFreedWhenLastWindowCloses...\n");
+
+    /* Temporarily close the suite's shared window so the count can reach zero. */
+    tearDownTestWindow();
+
+    cuif_window_desc desc = { 0 };
+    desc.title = "cuif_tests font-lifecycle";
+    desc.width = 64;
+    desc.height = 64;
+    cuif_window* win = cuif_window_create(&desc);
+    assert(win != NULL);
+    cuif_window_render_frame(win);
+
+    cuif_global_font = cuif_font_load("C:\\Windows\\Fonts\\arial.ttf", 13.0f);
+    assert(cuif_global_font != NULL);
+
+    cuif_window_destroy(win); /* count -> 0: must free the font and reset the pointer. */
+    assert(cuif_global_font == NULL);
+
+    /* Restore the suite's shared window for any tests that run after this one. */
+    setUpTestWindow();
+
+    printf("  cuif_global_font is freed and reset to NULL once the last window closes. Pass.\n");
+}
+
 int main(void) {
     printf("==============================\n");
     printf("Starting cuif Framework Tests\n");
@@ -507,6 +542,7 @@ int main(void) {
     testFontEffectiveBakePxClampsAtCeiling();
 
     testGlObjectsShareAcrossTwoWindows();
+    testFontFreedWhenLastWindowCloses();
 
     tearDownTestWindow();
 
