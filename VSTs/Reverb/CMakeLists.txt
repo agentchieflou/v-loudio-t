@@ -24,6 +24,10 @@ juce_generate_juce_header(LoudioReverb)
 target_sources(LoudioReverb PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
+    ../../Framework/src/graphics.c
+    ../../Framework/src/font.c
+    ../../Framework/src/widget.c
+    ../../Framework/src/window_win32.c
 )
 
 target_include_directories(LoudioReverb PRIVATE src ../../Framework/include)
@@ -38,6 +42,7 @@ target_link_libraries(LoudioReverb PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_gui_basics
+    opengl32
 PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
