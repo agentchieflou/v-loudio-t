@@ -1,0 +1,3 @@
+[submodule "VSTs/Reverb/JUCE"]
+	path = VSTs/Reverb/JUCE
+	url = https://github.com/juce-framework/JUCE.git
