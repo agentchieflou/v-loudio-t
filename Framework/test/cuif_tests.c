@@ -5,6 +5,7 @@
 #include "cuif/theme_greens.h"
 #include "cuif/cuif_dpi_utils.h"
 #include "cuif/tessellation.h"
+#include "cuif/graphics.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -360,6 +361,38 @@ static void testArcSegmentCountScalesWithDevicePixelDensity(void) {
            segments_at_2x, segments_at_1x);
 }
 
+static void testGenerateArcPointsStartsAndEndsAtCorrectAngles(void) {
+    printf("Running testGenerateArcPointsStartsAndEndsAtCorrectAngles...\n");
+
+    float points[CUIF_MAX_ARC_POINTS * 2];
+    float cx = 100.0f, cy = 50.0f, r = 20.0f;
+    float start_angle = 0.0f;
+    float end_angle = (float)(0.5 * M_PI); /* quarter circle */
+
+    int n = cuif_generate_arc_points(cx, cy, r, start_angle, end_angle, points, CUIF_MAX_ARC_POINTS);
+    assert(n >= 2);
+
+    float expected_start_x = cx + r * cosf(start_angle);
+    float expected_start_y = cy + r * sinf(start_angle);
+    float expected_end_x = cx + r * cosf(end_angle);
+    float expected_end_y = cy + r * sinf(end_angle);
+
+    assert(fabsf(points[0] - expected_start_x) < 1e-3f);
+    assert(fabsf(points[1] - expected_start_y) < 1e-3f);
+    assert(fabsf(points[(n - 1) * 2] - expected_end_x) < 1e-3f);
+    assert(fabsf(points[(n - 1) * 2 + 1] - expected_end_y) < 1e-3f);
+
+    /* Every generated point must actually lie on the circle (within float tolerance). */
+    for (int i = 0; i < n; ++i) {
+        float dx = points[i * 2] - cx;
+        float dy = points[i * 2 + 1] - cy;
+        float dist = sqrtf(dx * dx + dy * dy);
+        assert(fabsf(dist - r) < 1e-3f);
+    }
+
+    printf("  Generated arc points start/end at the requested angles and all lie on the circle. Pass.\n");
+}
+
 int main(void) {
     printf("==============================\n");
     printf("Starting cuif Framework Tests\n");
@@ -391,6 +424,7 @@ int main(void) {
     testArcSegmentCountIsMonotonicWithRadius();
     testArcSegmentCountClampsAtFloorAndCeiling();
     testArcSegmentCountScalesWithDevicePixelDensity();
+    testGenerateArcPointsStartsAndEndsAtCorrectAngles();
 
     tearDownTestWindow();
 
