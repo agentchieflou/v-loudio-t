@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <windows.h>
+#include <gl/gl.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -422,6 +424,51 @@ static void testFontEffectiveBakePxClampsAtCeiling(void) {
     printf("  Effective bake size clamps at a sane ceiling (%.1fpx) for pathological scale factors. Pass.\n", effective);
 }
 
+/*
+ * Regression test for #91 (closes #88): before the shared-root-GL-context
+ * fix, every cuif_window got a fully independent GL object namespace with
+ * no wglShareLists() anywhere, so a texture created while window A's
+ * context was current did not exist in window B's context -- exactly the
+ * bug that made cuif_global_font's texture render as blank/garbage in
+ * every plugin instance after the first. This exercises the real driver,
+ * not a mock: glIsTexture() would report GL_FALSE pre-fix.
+ */
+static void testGlObjectsShareAcrossTwoWindows(void) {
+    printf("Running testGlObjectsShareAcrossTwoWindows...\n");
+
+    cuif_window_desc desc = { 0 };
+    desc.title = "cuif_tests share-context A";
+    desc.width = 64;
+    desc.height = 64;
+    cuif_window* winA = cuif_window_create(&desc);
+    assert(winA != NULL);
+
+    desc.title = "cuif_tests share-context B";
+    cuif_window* winB = cuif_window_create(&desc);
+    assert(winB != NULL);
+
+    /* Makes winA's context current, then create+upload a texture in it. */
+    cuif_window_render_frame(winA);
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, 4, 4, 0, GL_ALPHA, GL_UNSIGNED_BYTE, NULL);
+    assert(glGetError() == GL_NO_ERROR);
+
+    /* Switches the current context to winB's -- a different HGLRC. */
+    cuif_window_render_frame(winB);
+    assert(glIsTexture(tex) == GL_TRUE);
+
+    glDeleteTextures(1, &tex);
+    cuif_window_destroy(winA);
+    cuif_window_destroy(winB);
+
+    /* Restore the shared test window's context as current for subsequent tests. */
+    cuif_window_render_frame(g_test_window);
+
+    printf("  A texture created under one window's GL context is valid under another window's context. Pass.\n");
+}
+
 int main(void) {
     printf("==============================\n");
     printf("Starting cuif Framework Tests\n");
@@ -458,6 +505,8 @@ int main(void) {
     testFontEffectiveBakePxIdentityAtScale1();
     testFontEffectiveBakePxScalesWithDpi();
     testFontEffectiveBakePxClampsAtCeiling();
+
+    testGlObjectsShareAcrossTwoWindows();
 
     tearDownTestWindow();
 
