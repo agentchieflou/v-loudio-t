@@ -28,6 +28,7 @@ target_sources(LoudioReverb PRIVATE
     ../../Framework/src/font.c
     ../../Framework/src/widget.c
     ../../Framework/src/window_win32.c
+    ../../Framework/src/theme.c
 )
 
 target_include_directories(LoudioReverb PRIVATE src ../../Framework/include)

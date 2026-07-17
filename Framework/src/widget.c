@@ -1,5 +1,6 @@
 #include "cuif/widget.h"
 #include "cuif/graphics.h"
+#include "cuif/theme.h"
 #include <windows.h>
 #include <gl/gl.h>
 #include <stdlib.h>
@@ -181,8 +182,9 @@ static void draw_dropdown_overlay(cuif_widget* w) {
     float item_h = 24.0f;
     float total_h = w->u.dropdown.item_count * item_h;
     
-    cuif_color bg = cuif_rgba(0.18f, 0.19f, 0.22f, 0.95f);
-    cuif_color border = cuif_rgb(0.3f, 0.32f, 0.35f);
+    const cuif_theme* active_theme = cuif_get_theme();
+    cuif_color bg = active_theme->dropdown_overlay_bg;
+    cuif_color border = active_theme->dropdown_overlay_border;
     
     /* Draw shadow/glow rectangle */
     cuif_draw_rect(w->x - 2.0f, w->y + w->h, w->w + 4.0f, total_h + 2.0f, cuif_rgba(0.0f, 0.0f, 0.0f, 0.3f), true);
@@ -203,14 +205,14 @@ static void draw_dropdown_overlay(cuif_widget* w) {
             float mx = (float)pt.x;
             float my = (float)pt.y;
             if (mx >= w->x && mx <= w->x + w->w && my >= iy && my < iy + item_h) {
-                cuif_draw_rect(w->x, iy, w->w, item_h, cuif_rgba(0.28f, 0.32f, 0.38f, 1.0f), true);
+                cuif_draw_rect(w->x, iy, w->w, item_h, active_theme->dropdown_hover_bg, true);
             }
         }
 
         if (cuif_global_font) {
-            cuif_color text_col = cuif_rgb(0.85f, 0.85f, 0.85f);
+            cuif_color text_col = active_theme->text_secondary;
             if (i == w->u.dropdown.selected_index) {
-                text_col = cuif_rgb(0.35f, 0.65f, 0.95f);
+                text_col = active_theme->primary;
             }
             cuif_draw_text(cuif_global_font, w->u.dropdown.items[i], w->x + 8.0f, iy + 16.0f, text_col);
         }
@@ -220,12 +222,13 @@ static void draw_dropdown_overlay(cuif_widget* w) {
 void cuif_widget_render(cuif_widget* w) {
     if (!w || !w->visible) return;
 
-    cuif_color theme_primary = cuif_rgb(0.35f, 0.65f, 0.95f);
-    cuif_color theme_bg_dark = cuif_rgb(0.12f, 0.13f, 0.15f);
-    cuif_color theme_panel_bg = cuif_rgb(0.18f, 0.19f, 0.22f);
-    cuif_color theme_border = cuif_rgb(0.28f, 0.30f, 0.34f);
-    cuif_color text_white = cuif_rgb(0.95f, 0.95f, 0.95f);
-    cuif_color text_gray = cuif_rgb(0.6f, 0.62f, 0.66f);
+    const cuif_theme* active_theme = cuif_get_theme();
+    cuif_color theme_primary = active_theme->primary;
+    cuif_color theme_bg_dark = active_theme->background;
+    cuif_color theme_panel_bg = active_theme->panel_bg;
+    cuif_color theme_border = active_theme->border;
+    cuif_color text_white = active_theme->text_primary;
+    cuif_color text_gray = active_theme->text_secondary;
 
     switch (w->type) {
         case CUIF_WIDGET_CONTAINER:
@@ -338,7 +341,7 @@ void cuif_widget_render(cuif_widget* w) {
             /* Draw grid lines */
             int grid_cols = 10;
             int grid_rows = 6;
-            cuif_color grid_color = cuif_rgba(0.2f, 0.22f, 0.25f, 0.4f);
+            cuif_color grid_color = active_theme->grid_line;
             for (int i = 1; i < grid_cols; ++i) {
                 float gx = w->x + (float)i / grid_cols * w->w;
                 cuif_draw_line(gx, w->y, gx, w->y + w->h, 1.0f, grid_color);
@@ -455,7 +458,7 @@ void cuif_widget_render(cuif_widget* w) {
             /* Draw grid lines */
             int grid_cols = 10;
             int grid_rows = 6;
-            cuif_color grid_color = cuif_rgba(0.2f, 0.22f, 0.25f, 0.3f);
+            cuif_color grid_color = active_theme->grid_line;
             for (int i = 1; i < grid_cols; ++i) {
                 float gx = w->x + (float)i / grid_cols * w->w;
                 cuif_draw_line(gx, w->y, gx, w->y + w->h, 1.0f, grid_color);
