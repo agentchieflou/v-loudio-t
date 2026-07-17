@@ -356,6 +356,18 @@ cuif_window* cuif_window_create(const cuif_window_desc* desc) {
         return NULL;
     }
 
+    /*
+     * Make the context current immediately, not just on the first
+     * cuif_window_render_frame() call. Without this, any GL work done by
+     * the caller between cuif_window_create() returning and the first
+     * render (e.g. cuif_font_load()'s texture upload) runs with no
+     * context current at all -- undefined behavior that happened to be
+     * silently tolerated by this driver rather than a guarantee.
+     */
+    if (!wglMakeCurrent(window->hdc, window->glrc)) {
+        CUIF_LOG("wglMakeCurrent failed immediately after context creation: error %lu", GetLastError());
+    }
+
     cuif_window_count++;
     CUIF_LOG("Active windows count: %d", cuif_window_count);
 

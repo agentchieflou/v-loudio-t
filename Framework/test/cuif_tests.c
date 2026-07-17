@@ -6,6 +6,7 @@
 #include "cuif/cuif_dpi_utils.h"
 #include "cuif/tessellation.h"
 #include "cuif/graphics.h"
+#include "cuif/font.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -393,6 +394,34 @@ static void testGenerateArcPointsStartsAndEndsAtCorrectAngles(void) {
     printf("  Generated arc points start/end at the requested angles and all lie on the circle. Pass.\n");
 }
 
+static void testFontEffectiveBakePxIdentityAtScale1(void) {
+    printf("Running testFontEffectiveBakePxIdentityAtScale1...\n");
+
+    assert(fabsf(cuif_font_effective_bake_px(13.0f, 1.0f) - 13.0f) < 1e-5f);
+
+    printf("  scale=1.0 leaves the design size unchanged. Pass.\n");
+}
+
+static void testFontEffectiveBakePxScalesWithDpi(void) {
+    printf("Running testFontEffectiveBakePxScalesWithDpi...\n");
+
+    assert(fabsf(cuif_font_effective_bake_px(13.0f, 2.0f) - 26.0f) < 1e-5f);
+    assert(fabsf(cuif_font_effective_bake_px(13.0f, 1.5f) - 19.5f) < 1e-5f);
+
+    printf("  Effective bake size scales linearly with dpi_scale. Pass.\n");
+}
+
+static void testFontEffectiveBakePxClampsAtCeiling(void) {
+    printf("Running testFontEffectiveBakePxClampsAtCeiling...\n");
+
+    /* A pathological scale factor must not request an unbounded atlas bake. */
+    float effective = cuif_font_effective_bake_px(13.0f, 100.0f);
+    assert(effective <= 128.0f);
+    assert(effective > 0.0f);
+
+    printf("  Effective bake size clamps at a sane ceiling (%.1fpx) for pathological scale factors. Pass.\n", effective);
+}
+
 int main(void) {
     printf("==============================\n");
     printf("Starting cuif Framework Tests\n");
@@ -425,6 +454,10 @@ int main(void) {
     testArcSegmentCountClampsAtFloorAndCeiling();
     testArcSegmentCountScalesWithDevicePixelDensity();
     testGenerateArcPointsStartsAndEndsAtCorrectAngles();
+
+    testFontEffectiveBakePxIdentityAtScale1();
+    testFontEffectiveBakePxScalesWithDpi();
+    testFontEffectiveBakePxClampsAtCeiling();
 
     tearDownTestWindow();
 
