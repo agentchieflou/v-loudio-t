@@ -168,9 +168,29 @@ typedef BOOL(WINAPI* PFNCUIFWGLCHOOSEPIXELFORMATARBPROC)(HDC hdc, const int* piA
 static bool cuif_wgl_ext_probed = false;
 static PFNCUIFWGLCHOOSEPIXELFORMATARBPROC cuif_wglChoosePixelFormatARB = NULL;
 
-static void cuif_probe_wgl_multisample_support(void) {
+/*
+ * Process-wide root GL context (#91, closes #88). Every per-window HGLRC
+ * created in cuif_init_gl_context() shares its object namespace (textures,
+ * display lists) with this one via wglShareLists(), so GL objects baked
+ * once (e.g. the font atlas in font.c) stay valid across every window's
+ * context for as long as ANY window exists -- including across a single
+ * window closing and reopening, where previously the font texture lived
+ * only in that one now-destroyed context.
+ *
+ * Bootstrapped from the same hidden-dummy-window trick already used to
+ * resolve wglChoosePixelFormatARB below, except this context is kept
+ * alive (not torn down at the end of the probe) and reused as the share
+ * root for the lifetime of the process. Lazily created on the first ever
+ * cuif_window_create() call; torn down in cuif_window_destroy() once
+ * cuif_window_count returns to zero (see that function).
+ */
+static HWND cuif_root_hwnd = NULL;
+static HDC cuif_root_hdc = NULL;
+static HGLRC cuif_root_glrc = NULL;
+
+static void cuif_ensure_gl_root_context(void) {
     if (cuif_wgl_ext_probed) return;
-    cuif_wgl_ext_probed = true; /* only ever attempt this once, success or not */
+    cuif_wgl_ext_probed = true; /* only ever attempt this once per lazy-create cycle, success or not */
 
     HINSTANCE hinstance = GetModuleHandleW(NULL);
 
@@ -179,18 +199,18 @@ static void cuif_probe_wgl_multisample_support(void) {
     dummy_wc.hInstance = hinstance;
     dummy_wc.lpszClassName = L"cuif_wgl_probe_class";
     if (!RegisterClassW(&dummy_wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-        CUIF_LOG("MSAA probe: RegisterClassW for dummy window failed: error %lu", GetLastError());
+        CUIF_LOG("GL root context: RegisterClassW for dummy window failed: error %lu", GetLastError());
         return;
     }
 
-    HWND dummy_hwnd = CreateWindowExW(0, dummy_wc.lpszClassName, L"", 0, 0, 0, 1, 1, NULL, NULL, hinstance, NULL);
-    if (!dummy_hwnd) {
-        CUIF_LOG("MSAA probe: dummy CreateWindowExW failed: error %lu", GetLastError());
+    cuif_root_hwnd = CreateWindowExW(0, dummy_wc.lpszClassName, L"", 0, 0, 0, 1, 1, NULL, NULL, hinstance, NULL);
+    if (!cuif_root_hwnd) {
+        CUIF_LOG("GL root context: dummy CreateWindowExW failed: error %lu", GetLastError());
         UnregisterClassW(dummy_wc.lpszClassName, hinstance);
         return;
     }
 
-    HDC dummy_hdc = GetDC(dummy_hwnd);
+    cuif_root_hdc = GetDC(cuif_root_hwnd);
     PIXELFORMATDESCRIPTOR pfd = {0};
     pfd.nSize = sizeof(pfd);
     pfd.nVersion = 1;
@@ -200,29 +220,35 @@ static void cuif_probe_wgl_multisample_support(void) {
     pfd.cDepthBits = 24;
     pfd.cStencilBits = 8;
 
-    int dummy_pf = ChoosePixelFormat(dummy_hdc, &pfd);
-    if (dummy_pf != 0 && SetPixelFormat(dummy_hdc, dummy_pf, &pfd)) {
-        HGLRC dummy_glrc = wglCreateContext(dummy_hdc);
-        if (dummy_glrc) {
+    int dummy_pf = ChoosePixelFormat(cuif_root_hdc, &pfd);
+    if (dummy_pf != 0 && SetPixelFormat(cuif_root_hdc, dummy_pf, &pfd)) {
+        cuif_root_glrc = wglCreateContext(cuif_root_hdc);
+        if (cuif_root_glrc) {
             /* wglGetProcAddress only resolves valid pointers with a context current. */
-            if (wglMakeCurrent(dummy_hdc, dummy_glrc)) {
+            if (wglMakeCurrent(cuif_root_hdc, cuif_root_glrc)) {
                 cuif_wglChoosePixelFormatARB = (PFNCUIFWGLCHOOSEPIXELFORMATARBPROC)wglGetProcAddress("wglChoosePixelFormatARB");
                 wglMakeCurrent(NULL, NULL);
-                CUIF_LOG("MSAA probe: wglChoosePixelFormatARB = %p", (void*)cuif_wglChoosePixelFormatARB);
+                CUIF_LOG("GL root context: created glrc = %p, wglChoosePixelFormatARB = %p", (void*)cuif_root_glrc, (void*)cuif_wglChoosePixelFormatARB);
             }
-            wglDeleteContext(dummy_glrc);
         }
     } else {
-        CUIF_LOG("MSAA probe: dummy pixel format setup failed: error %lu", GetLastError());
+        CUIF_LOG("GL root context: dummy pixel format setup failed: error %lu", GetLastError());
     }
 
-    ReleaseDC(dummy_hwnd, dummy_hdc);
-    DestroyWindow(dummy_hwnd);
-    UnregisterClassW(dummy_wc.lpszClassName, hinstance);
+    if (!cuif_root_glrc) {
+        /* Root context creation failed -- clean up the dummy window/HDC so we
+         * don't leak it, but leave the statics NULL. Every per-window context
+         * still gets created normally in cuif_init_gl_context(); it just won't
+         * have anything to share with (logged there, non-fatal). */
+        if (cuif_root_hdc) { ReleaseDC(cuif_root_hwnd, cuif_root_hdc); cuif_root_hdc = NULL; }
+        DestroyWindow(cuif_root_hwnd);
+        cuif_root_hwnd = NULL;
+        UnregisterClassW(dummy_wc.lpszClassName, hinstance);
+    }
 }
 
 static bool cuif_init_gl_context(cuif_window* window) {
-    cuif_probe_wgl_multisample_support();
+    cuif_ensure_gl_root_context();
 
     PIXELFORMATDESCRIPTOR pfd = {0};
     pfd.nSize = sizeof(pfd);
@@ -282,6 +308,18 @@ static bool cuif_init_gl_context(cuif_window* window) {
     if (!window->glrc) {
         CUIF_LOG("wglCreateContext failed: error %lu", GetLastError());
         return false;
+    }
+
+    /*
+     * Share GL object namespace (textures, display lists) with the
+     * process-wide root context (#91, closes #88) so objects baked in one
+     * window's context (the font atlas, in particular) stay valid in every
+     * other window's context, including a window created later. Logged and
+     * non-fatal on failure -- that window just falls back to today's
+     * unshared behavior rather than failing to open at all.
+     */
+    if (cuif_root_glrc && !wglShareLists(cuif_root_glrc, window->glrc)) {
+        CUIF_LOG("wglShareLists failed: error %lu (this window will render unshared GL objects)", GetLastError());
     }
 
     CUIF_LOG("GL Context initialized successfully. glrc = %p", window->glrc);
@@ -399,6 +437,30 @@ void cuif_window_destroy(cuif_window* window) {
         CUIF_LOG("Unregistering window class: %S", CUIF_WNDCLASS_NAME);
         UnregisterClassW(CUIF_WNDCLASS_NAME, hinstance);
         cuif_class_registered = false;
+
+        /*
+         * Tear down the process-wide root context (#91) now that no window
+         * anywhere in the process needs its shared GL objects anymore. Reset
+         * cuif_wgl_ext_probed too so a later cold start (count back up from
+         * zero) re-probes and re-creates a fresh root context/dummy window
+         * rather than silently reusing now-dangling handles.
+         */
+        if (cuif_root_glrc) {
+            wglMakeCurrent(NULL, NULL);
+            wglDeleteContext(cuif_root_glrc);
+            cuif_root_glrc = NULL;
+        }
+        if (cuif_root_hdc) {
+            ReleaseDC(cuif_root_hwnd, cuif_root_hdc);
+            cuif_root_hdc = NULL;
+        }
+        if (cuif_root_hwnd) {
+            DestroyWindow(cuif_root_hwnd);
+            cuif_root_hwnd = NULL;
+        }
+        UnregisterClassW(L"cuif_wgl_probe_class", hinstance);
+        cuif_wgl_ext_probed = false;
+        cuif_wglChoosePixelFormatARB = NULL;
     }
 }
 
