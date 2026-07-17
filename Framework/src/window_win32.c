@@ -1,4 +1,5 @@
 #include "cuif/window.h"
+#include "cuif/widget.h"
 
 #include <windows.h>
 #include <gl/gl.h>
@@ -11,17 +12,63 @@ struct cuif_window {
     bool should_close;
     cuif_render_fn render_fn;
     void* render_user_data;
+    struct cuif_widget* root_widget;
+    float last_mx;
+    float last_my;
 };
 
 static const wchar_t* CUIF_WNDCLASS_NAME = L"cuif_window_class";
 
 static LRESULT CALLBACK cuif_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     cuif_window* window = (cuif_window*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if (!window) return DefWindowProcW(hwnd, msg, wparam, lparam);
 
     switch (msg) {
         case WM_CLOSE:
-            if (window) window->should_close = true;
+            window->should_close = true;
             return 0;
+        case WM_LBUTTONDOWN: {
+            float mx = (float)((int)(short)LOWORD(lparam));
+            float my = (float)((int)(short)HIWORD(lparam));
+            window->last_mx = mx;
+            window->last_my = my;
+            SetCapture(hwnd);
+            if (window->root_widget) {
+                cuif_widget_dispatch_mouse_down(window->root_widget, mx, my, 0);
+            }
+            return 0;
+        }
+        case WM_LBUTTONUP: {
+            float mx = (float)((int)(short)LOWORD(lparam));
+            float my = (float)((int)(short)HIWORD(lparam));
+            ReleaseCapture();
+            if (window->root_widget) {
+                cuif_widget_dispatch_mouse_up(window->root_widget, mx, my, 0);
+            }
+            return 0;
+        }
+        case WM_MOUSEMOVE: {
+            float mx = (float)((int)(short)LOWORD(lparam));
+            float my = (float)((int)(short)HIWORD(lparam));
+            float dx = mx - window->last_mx;
+            float dy = my - window->last_my;
+            window->last_mx = mx;
+            window->last_my = my;
+            if (window->root_widget) {
+                cuif_widget_dispatch_mouse_move(window->root_widget, mx, my, dx, dy, (wparam & MK_LBUTTON) ? 0 : -1);
+            }
+            return 0;
+        }
+        case WM_SIZE: {
+            int w = LOWORD(lparam);
+            int h = HIWORD(lparam);
+            if (window->root_widget) {
+                window->root_widget->w = (float)w;
+                window->root_widget->h = (float)h;
+            }
+            glViewport(0, 0, w, h);
+            return 0;
+        }
         case WM_DESTROY:
             return 0;
         default:
@@ -136,10 +183,37 @@ void cuif_window_set_render_callback(cuif_window* window, cuif_render_fn fn, voi
     window->render_user_data = user_data;
 }
 
+void cuif_window_set_root_widget(cuif_window* window, struct cuif_widget* root) {
+    if (!window) return;
+    window->root_widget = root;
+    if (root) {
+        RECT rect;
+        GetClientRect(window->hwnd, &rect);
+        root->w = (float)(rect.right - rect.left);
+        root->h = (float)(rect.bottom - rect.top);
+    }
+}
+
 void cuif_window_render_frame(cuif_window* window) {
     if (!window || !window->glrc) return;
 
     wglMakeCurrent(window->hdc, window->glrc);
+
+    RECT rect;
+    GetClientRect(window->hwnd, &rect);
+    int width = rect.right - rect.left;
+    int height = rect.bottom - rect.top;
+
+    glViewport(0, 0, width, height);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0.0, width, height, 0.0, -1.0, 1.0); /* Y-down coordinate space */
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     if (window->render_fn) {
         window->render_fn(window, window->render_user_data);

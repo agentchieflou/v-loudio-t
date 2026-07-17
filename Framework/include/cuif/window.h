@@ -34,6 +34,7 @@ void cuif_window_destroy(cuif_window* window);
 bool cuif_window_pump(cuif_window* window);
 
 void cuif_window_set_render_callback(cuif_window* window, cuif_render_fn fn, void* user_data);
+void cuif_window_set_root_widget(cuif_window* window, struct cuif_widget* root);
 
 /* Makes the window's GL context current, invokes the render callback, and swaps buffers. */
 void cuif_window_render_frame(cuif_window* window);

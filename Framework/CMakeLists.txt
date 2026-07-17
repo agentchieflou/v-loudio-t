@@ -11,6 +11,9 @@ endif()
 
 add_library(cuif STATIC
     src/window_win32.c
+    src/graphics.c
+    src/font.c
+    src/widget.c
 )
 
 target_include_directories(cuif PUBLIC include)
