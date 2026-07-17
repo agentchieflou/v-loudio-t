@@ -15,7 +15,8 @@ typedef enum {
     CUIF_WIDGET_DROPDOWN,
     CUIF_WIDGET_BEZIER_EDITOR,
     CUIF_WIDGET_ANALYZER,
-    CUIF_WIDGET_CONTAINER
+    CUIF_WIDGET_CONTAINER,
+    CUIF_WIDGET_TABBAR
 } cuif_widget_type;
 
 typedef struct cuif_widget cuif_widget;
@@ -83,6 +84,13 @@ struct cuif_widget {
             int buffer_size;
             cuif_color line_color;
         } analyzer;
+
+        struct {
+            const char** tab_labels;
+            int tab_count;
+            int selected_index;
+            cuif_widget_value_changed_fn on_change;
+        } tabbar;
     } u;
 };
 
@@ -97,6 +105,14 @@ cuif_widget* cuif_widget_create_button(float x, float y, float w, float h, const
 cuif_widget* cuif_widget_create_dropdown(float x, float y, float w, float h, const char** items, int item_count, cuif_widget_value_changed_fn on_change);
 cuif_widget* cuif_widget_create_bezier_editor(float x, float y, float w, float h, int num_nodes, void (*on_curve_change)(cuif_widget* w));
 cuif_widget* cuif_widget_create_analyzer(float x, float y, float w, float h, float* buffer, int buffer_size, cuif_color color);
+/*
+ * A row of equal-width labeled tabs. Tracks a selected index and fires
+ * on_change with the newly selected index when clicked -- it does not
+ * manage page/content switching itself. The conventional pattern is to
+ * give each "page" its own CUIF_WIDGET_CONTAINER child and toggle that
+ * container's `visible` flag from the on_change callback.
+ */
+cuif_widget* cuif_widget_create_tabbar(float x, float y, float w, float h, const char** labels, int tab_count, cuif_widget_value_changed_fn on_change);
 
 void cuif_widget_destroy(cuif_widget* w);
 void cuif_widget_add_child(cuif_widget* parent, cuif_widget* child);
