@@ -1,6 +1,7 @@
 #include "cuif/cuif.h"
 #include "cuif/widget.h"
 #include "cuif/theme.h"
+#include "cuif/theme_hello_kitty.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -11,6 +12,36 @@ static bool colorsEqual(cuif_color a, cuif_color b) {
     const float eps = 1e-6f;
     return fabsf(a.r - b.r) < eps && fabsf(a.g - b.g) < eps &&
            fabsf(a.b - b.b) < eps && fabsf(a.a - b.a) < eps;
+}
+
+/* Rough perceptual luminance -- good enough for a readability sanity check, not color-accurate. */
+static float luminance(cuif_color c) {
+    return 0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b;
+}
+
+/*
+ * Verifies a theme's text colors are readable against its own background --
+ * i.e. the theme isn't internally broken (e.g. near-identical text and
+ * background luminance, which would render as illegible). Shared by every
+ * theme's test (default, Hello Kitty, Greens, ...) so a bad palette can't
+ * ship silently.
+ */
+static void assertThemeIsReadable(const cuif_theme* theme, const char* theme_name) {
+    float bg_lum = luminance(theme->background);
+    float text_primary_lum = luminance(theme->text_primary);
+    float text_secondary_lum = luminance(theme->text_secondary);
+
+    float primary_contrast = fabsf(text_primary_lum - bg_lum);
+    float secondary_contrast = fabsf(text_secondary_lum - bg_lum);
+
+    if (primary_contrast < 0.3f) {
+        printf("  FAIL: %s text_primary has insufficient contrast against background (%.3f)\n", theme_name, primary_contrast);
+    }
+    if (secondary_contrast < 0.15f) {
+        printf("  FAIL: %s text_secondary has insufficient contrast against background (%.3f)\n", theme_name, secondary_contrast);
+    }
+    assert(primary_contrast >= 0.3f);
+    assert(secondary_contrast >= 0.15f);
 }
 
 /*
@@ -160,6 +191,38 @@ static void testSetThemeNullFallsBackToDefault(void) {
     printf("  cuif_set_theme(NULL) falls back to CUIF_THEME_DEFAULT. Pass.\n");
 }
 
+static void testDefaultThemeIsReadable(void) {
+    printf("Running testDefaultThemeIsReadable...\n");
+    assertThemeIsReadable(&CUIF_THEME_DEFAULT, "default");
+    printf("  Default theme text has sufficient contrast against its own background. Pass.\n");
+}
+
+static void testHelloKittyThemeIsDistinctFromDefault(void) {
+    printf("Running testHelloKittyThemeIsDistinctFromDefault...\n");
+
+    assert(!colorsEqual(CUIF_THEME_HELLO_KITTY.background, CUIF_THEME_DEFAULT.background));
+    assert(!colorsEqual(CUIF_THEME_HELLO_KITTY.primary, CUIF_THEME_DEFAULT.primary));
+    assert(!colorsEqual(CUIF_THEME_HELLO_KITTY.panel_bg, CUIF_THEME_DEFAULT.panel_bg));
+
+    printf("  Hello Kitty theme uses a genuinely different palette from the default. Pass.\n");
+}
+
+static void testHelloKittyThemeIsReadable(void) {
+    printf("Running testHelloKittyThemeIsReadable...\n");
+    assertThemeIsReadable(&CUIF_THEME_HELLO_KITTY, "Hello Kitty");
+    printf("  Hello Kitty theme text has sufficient contrast against its own background. Pass.\n");
+}
+
+static void testHelloKittyThemeAppliesViaSetTheme(void) {
+    printf("Running testHelloKittyThemeAppliesViaSetTheme...\n");
+
+    cuif_set_theme(&CUIF_THEME_HELLO_KITTY);
+    assert(colorsEqual(cuif_get_theme()->primary, CUIF_THEME_HELLO_KITTY.primary));
+
+    cuif_set_theme(&CUIF_THEME_DEFAULT);
+    printf("  cuif_set_theme(&CUIF_THEME_HELLO_KITTY) is reflected by cuif_get_theme(). Pass.\n");
+}
+
 int main(void) {
     printf("==============================\n");
     printf("Starting cuif Framework Tests\n");
@@ -174,6 +237,11 @@ int main(void) {
     testDefaultThemeIsActiveInitially();
     testSetThemeChangesActiveTheme();
     testSetThemeNullFallsBackToDefault();
+
+    testDefaultThemeIsReadable();
+    testHelloKittyThemeIsDistinctFromDefault();
+    testHelloKittyThemeIsReadable();
+    testHelloKittyThemeAppliesViaSetTheme();
 
     tearDownTestWindow();
 

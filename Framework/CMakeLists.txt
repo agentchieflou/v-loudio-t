@@ -15,6 +15,7 @@ add_library(cuif STATIC
     src/font.c
     src/widget.c
     src/theme.c
+    src/theme_hello_kitty.c
 )
 
 target_include_directories(cuif PUBLIC include)
