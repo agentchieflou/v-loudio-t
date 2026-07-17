@@ -2,6 +2,7 @@
 #include "cuif/widget.h"
 #include "cuif/theme.h"
 #include "cuif/theme_hello_kitty.h"
+#include "cuif/theme_greens.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -223,6 +224,33 @@ static void testHelloKittyThemeAppliesViaSetTheme(void) {
     printf("  cuif_set_theme(&CUIF_THEME_HELLO_KITTY) is reflected by cuif_get_theme(). Pass.\n");
 }
 
+static void testGreensThemeIsDistinctFromDefaultAndHelloKitty(void) {
+    printf("Running testGreensThemeIsDistinctFromDefaultAndHelloKitty...\n");
+
+    assert(!colorsEqual(CUIF_THEME_GREENS.background, CUIF_THEME_DEFAULT.background));
+    assert(!colorsEqual(CUIF_THEME_GREENS.primary, CUIF_THEME_DEFAULT.primary));
+    assert(!colorsEqual(CUIF_THEME_GREENS.background, CUIF_THEME_HELLO_KITTY.background));
+    assert(!colorsEqual(CUIF_THEME_GREENS.primary, CUIF_THEME_HELLO_KITTY.primary));
+
+    printf("  Greens theme uses a genuinely different palette from both other themes. Pass.\n");
+}
+
+static void testGreensThemeIsReadable(void) {
+    printf("Running testGreensThemeIsReadable...\n");
+    assertThemeIsReadable(&CUIF_THEME_GREENS, "Greens");
+    printf("  Greens theme text has sufficient contrast against its own background. Pass.\n");
+}
+
+static void testGreensThemeAppliesViaSetTheme(void) {
+    printf("Running testGreensThemeAppliesViaSetTheme...\n");
+
+    cuif_set_theme(&CUIF_THEME_GREENS);
+    assert(colorsEqual(cuif_get_theme()->primary, CUIF_THEME_GREENS.primary));
+
+    cuif_set_theme(&CUIF_THEME_DEFAULT);
+    printf("  cuif_set_theme(&CUIF_THEME_GREENS) is reflected by cuif_get_theme(). Pass.\n");
+}
+
 int main(void) {
     printf("==============================\n");
     printf("Starting cuif Framework Tests\n");
@@ -242,6 +270,10 @@ int main(void) {
     testHelloKittyThemeIsDistinctFromDefault();
     testHelloKittyThemeIsReadable();
     testHelloKittyThemeAppliesViaSetTheme();
+
+    testGreensThemeIsDistinctFromDefaultAndHelloKitty();
+    testGreensThemeIsReadable();
+    testGreensThemeAppliesViaSetTheme();
 
     tearDownTestWindow();
 
