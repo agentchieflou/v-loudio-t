@@ -15,5 +15,8 @@
 
 #include "window.h"
 #include "ring_buffer.h"
+#include "graphics.h"
+#include "font.h"
+#include "widget.h"
 
 #endif /* CUIF_H */
