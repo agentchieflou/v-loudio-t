@@ -2,6 +2,7 @@
 #include "cuif/widget.h"
 #include "cuif/theme.h"
 #include "cuif/cuif_dpi_utils.h"
+#include "cuif/font.h"
 
 #include <windows.h>
 #include <gl/gl.h>
@@ -437,6 +438,32 @@ void cuif_window_destroy(cuif_window* window) {
         CUIF_LOG("Unregistering window class: %S", CUIF_WNDCLASS_NAME);
         UnregisterClassW(CUIF_WNDCLASS_NAME, hinstance);
         cuif_class_registered = false;
+
+        /*
+         * Free the process-wide font atlas (#92, fixes reopen-in-place
+         * fuzzy/blank text) now that this was the last live window. The
+         * window whose destruction brought the count to zero already had
+         * its own context deleted and made non-current above, so there is
+         * currently NO context current -- glDeleteTextures() inside
+         * cuif_font_free() needs one. The root context still exists at this
+         * point (torn down below) and shares the same object namespace the
+         * texture was created in, so make it current just for this call.
+         *
+         * cuif_global_font is only ever alive while at least one window
+         * exists anywhere in the process -- the reopen-in-place case
+         * (single track, close, reopen) is exactly "count hits 0, then back
+         * to 1", which now correctly re-triggers cuif_font_load() on the
+         * next window creation instead of reusing a pointer whose
+         * texture_id no longer exists in any live context.
+         */
+        if (cuif_global_font) {
+            if (cuif_root_glrc) {
+                wglMakeCurrent(cuif_root_hdc, cuif_root_glrc);
+            }
+            cuif_font_free(cuif_global_font);
+            cuif_global_font = NULL;
+            wglMakeCurrent(NULL, NULL);
+        }
 
         /*
          * Tear down the process-wide root context (#91) now that no window
