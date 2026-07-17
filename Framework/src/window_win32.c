@@ -4,6 +4,13 @@
 #include <windows.h>
 #include <gl/gl.h>
 #include <stdlib.h>
+#include <stdio.h>
+
+#define CUIF_LOG(fmt, ...) { \
+    char buf[512]; \
+    sprintf_s(buf, sizeof(buf), "[CUIF] " fmt "\n", ##__VA_ARGS__); \
+    OutputDebugStringA(buf); \
+}
 
 struct cuif_window {
     HWND hwnd;
@@ -22,6 +29,8 @@ struct cuif_window {
 };
 
 cuif_window* cuif_current_window = NULL;
+static int cuif_window_count = 0;
+static bool cuif_class_registered = false;
 
 static const wchar_t* CUIF_WNDCLASS_NAME = L"cuif_window_class";
 
@@ -35,6 +44,14 @@ static LRESULT CALLBACK cuif_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
         case WM_CLOSE:
             window->should_close = true;
             return 0;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            (void)hdc;
+            cuif_window_render_frame(window);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
         case WM_LBUTTONDOWN: {
             float mx = (float)((int)(short)LOWORD(lparam));
             float my = (float)((int)(short)HIWORD(lparam));
@@ -84,9 +101,8 @@ static LRESULT CALLBACK cuif_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
     }
 }
 
-static void cuif_register_class_once(HINSTANCE hinstance) {
-    static bool registered = false;
-    if (registered) return;
+static bool cuif_register_class_once(HINSTANCE hinstance) {
+    if (cuif_class_registered) return true;
 
     WNDCLASSW wc = {0};
     wc.style = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
@@ -94,9 +110,18 @@ static void cuif_register_class_once(HINSTANCE hinstance) {
     wc.hInstance = hinstance;
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     wc.lpszClassName = CUIF_WNDCLASS_NAME;
-    RegisterClassW(&wc);
+    
+    if (!RegisterClassW(&wc)) {
+        DWORD err = GetLastError();
+        if (err != ERROR_CLASS_ALREADY_EXISTS) {
+            CUIF_LOG("RegisterClassW failed: error %lu", err);
+            return false;
+        }
+    }
 
-    registered = true;
+    CUIF_LOG("RegisterClassW succeeded or class already exists.");
+    cuif_class_registered = true;
+    return true;
 }
 
 static bool cuif_init_gl_context(cuif_window* window) {
@@ -111,12 +136,22 @@ static bool cuif_init_gl_context(cuif_window* window) {
     pfd.iLayerType = PFD_MAIN_PLANE;
 
     int pixel_format = ChoosePixelFormat(window->hdc, &pfd);
-    if (pixel_format == 0) return false;
-    if (!SetPixelFormat(window->hdc, pixel_format, &pfd)) return false;
+    if (pixel_format == 0) {
+        CUIF_LOG("ChoosePixelFormat failed: error %lu", GetLastError());
+        return false;
+    }
+    if (!SetPixelFormat(window->hdc, pixel_format, &pfd)) {
+        CUIF_LOG("SetPixelFormat failed: error %lu", GetLastError());
+        return false;
+    }
 
     window->glrc = wglCreateContext(window->hdc);
-    if (!window->glrc) return false;
+    if (!window->glrc) {
+        CUIF_LOG("wglCreateContext failed: error %lu", GetLastError());
+        return false;
+    }
 
+    CUIF_LOG("GL Context initialized successfully. glrc = %p", window->glrc);
     return true;
 }
 
@@ -124,8 +159,17 @@ cuif_window* cuif_window_create(const cuif_window_desc* desc) {
     cuif_window* window = (cuif_window*)calloc(1, sizeof(cuif_window));
     if (!window) return NULL;
 
-    HINSTANCE hinstance = GetModuleHandleW(NULL);
-    cuif_register_class_once(hinstance);
+    HMODULE hinstance = NULL;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)cuif_window_create, &hinstance);
+
+    CUIF_LOG("cuif_window_create: starting on hinstance = %p", hinstance);
+
+    if (!cuif_register_class_once(hinstance)) {
+        free(window);
+        return NULL;
+    }
 
     int width = desc->width > 0 ? desc->width : 800;
     int height = desc->height > 0 ? desc->height : 600;
@@ -136,6 +180,16 @@ cuif_window* cuif_window_create(const cuif_window_desc* desc) {
     }
 
     HWND parent = (HWND)desc->parent_native_handle;
+    if (parent) {
+        DWORD parent_style = GetWindowLongW(parent, GWL_STYLE);
+        CUIF_LOG("Parent window handle = %p. Initial style = %08lX", parent, parent_style);
+        if (!(parent_style & WS_CLIPCHILDREN)) {
+            CUIF_LOG("Parent window is missing WS_CLIPCHILDREN. Injecting it now.");
+            SetWindowLongW(parent, GWL_STYLE, parent_style | WS_CLIPCHILDREN);
+            SetWindowPos(parent, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        }
+    }
+
     DWORD style = parent ? WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN : WS_OVERLAPPEDWINDOW | WS_VISIBLE;
     int posX = parent ? 0 : CW_USEDEFAULT;
     int posY = parent ? 0 : CW_USEDEFAULT;
@@ -146,9 +200,12 @@ cuif_window* cuif_window_create(const cuif_window_desc* desc) {
         parent, NULL, hinstance, NULL);
 
     if (!window->hwnd) {
+        CUIF_LOG("CreateWindowExW failed: error %lu", GetLastError());
         free(window);
         return NULL;
     }
+
+    CUIF_LOG("CreateWindowExW succeeded. HWND = %p", window->hwnd);
 
     SetWindowLongPtrW(window->hwnd, GWLP_USERDATA, (LONG_PTR)window);
     window->hdc = GetDC(window->hwnd);
@@ -159,11 +216,16 @@ cuif_window* cuif_window_create(const cuif_window_desc* desc) {
         return NULL;
     }
 
+    cuif_window_count++;
+    CUIF_LOG("Active windows count: %d", cuif_window_count);
+
     return window;
 }
 
 void cuif_window_destroy(cuif_window* window) {
     if (!window) return;
+
+    CUIF_LOG("cuif_window_destroy starting for HWND = %p", window->hwnd);
 
     if (window->glrc) {
         wglMakeCurrent(NULL, NULL);
@@ -173,6 +235,19 @@ void cuif_window_destroy(cuif_window* window) {
     if (window->hwnd) DestroyWindow(window->hwnd);
 
     free(window);
+
+    cuif_window_count--;
+    CUIF_LOG("Active windows count: %d", cuif_window_count);
+
+    if (cuif_window_count == 0) {
+        HMODULE hinstance = NULL;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)cuif_window_create, &hinstance);
+        CUIF_LOG("Unregistering window class: %S", CUIF_WNDCLASS_NAME);
+        UnregisterClassW(CUIF_WNDCLASS_NAME, hinstance);
+        cuif_class_registered = false;
+    }
 }
 
 bool cuif_window_pump(cuif_window* window) {
@@ -209,7 +284,13 @@ void cuif_window_render_frame(cuif_window* window) {
 
     cuif_current_window = window;
 
-    wglMakeCurrent(window->hdc, window->glrc);
+    if (!wglMakeCurrent(window->hdc, window->glrc)) {
+        static int log_counter = 0;
+        if (log_counter++ % 60 == 0) {
+            CUIF_LOG("wglMakeCurrent failed: error %lu", GetLastError());
+        }
+        return;
+    }
 
     RECT rect;
     GetClientRect(window->hwnd, &rect);
