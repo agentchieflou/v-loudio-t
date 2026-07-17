@@ -2,23 +2,37 @@
 
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "cuif/cuif.h"
+#include "SharedStructures.h"
 
-/*
- * Placeholder editor -- Epic 0 scaffolding only. Gets replaced by the
- * cuif-based editor in Epic 5 (JUCE<->Framework bridge, issue: "JUCE <->
- * Framework bridge"), which embeds a Framework/ native window inside this
- * editor's host-provided parent window handle.
- */
-class LoudioReverbEditor : public juce::AudioProcessorEditor {
+class LoudioReverbEditor : public juce::AudioProcessorEditor, public juce::Timer {
 public:
     explicit LoudioReverbEditor(LoudioReverbProcessor&);
-    ~LoudioReverbEditor() override = default;
+    ~LoudioReverbEditor() override;
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    void timerCallback() override;
+
+    void pollSpectrumData();
+    void syncUIFromProcessor();
+
+    LoudioReverbProcessor& processorRef;
 
 private:
-    LoudioReverbProcessor& processorRef;
+    cuif_window* myWindow = nullptr;
+    cuif_widget* rootContainer = nullptr;
+
+    /* Array containing knob pointers mapped by ReverbParamIndex */
+    cuif_widget* knobs[kNumParams] = { nullptr };
+    cuif_widget* freezeButton = nullptr;
+    cuif_widget* modeDropdown = nullptr;
+    cuif_widget* bezierEditor = nullptr;
+    cuif_widget* analyzerLeft = nullptr;
+    cuif_widget* analyzerRight = nullptr;
+
+    float leftSpectrum[64];
+    float rightSpectrum[64];
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LoudioReverbEditor)
 };
