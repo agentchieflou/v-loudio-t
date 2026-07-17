@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "ReverbThemeMapping.h"
 #include <cmath>
 
 static float mapParamValueToWidget(int index, float rawVal) {
@@ -76,6 +77,20 @@ static void dropdownChangedCallback(cuif_widget* w, float val) {
     float mappedVal = mapWidgetValueToParam(paramIdx, val);
     
     ParamUpdateMessage msg = { paramIdx, mappedVal };
+    cuif_spsc_write(&editor->processorRef.uiToDspRingBuffer, (const unsigned char*)&msg, sizeof(ParamUpdateMessage));
+}
+
+static void themeChangedCallback(cuif_widget* w, float val) {
+    if (!w || !w->parent) return;
+    auto* editor = static_cast<LoudioReverbEditor*>(w->parent->user_data);
+    if (!editor) return;
+    int themeIndex = (int)val;
+
+    /* Apply immediately on the UI thread -- rendering happens here, not on the audio thread. */
+    cuif_set_theme(themeForUiThemeIndex(themeIndex));
+
+    /* Persist through the same ring-buffer -> APVTS path every other parameter uses. */
+    ParamUpdateMessage msg = { kParamUiTheme, (float)themeIndex };
     cuif_spsc_write(&editor->processorRef.uiToDspRingBuffer, (const unsigned char*)&msg, sizeof(ParamUpdateMessage));
 }
 
@@ -192,6 +207,12 @@ void LoudioReverbEditor::ensureCuifWindowCreated() {
     modeDropdown = cuif_widget_create_dropdown(650.0f, 15.0f, 120.0f, 30.0f, modesList, 5, dropdownChangedCallback);
     modeDropdown->user_data = (void*)(intptr_t)kParamMode;
     cuif_widget_add_child(rootContainer, modeDropdown);
+
+    /* 3b. Add UI Theme Dropdown (#68) */
+    static const char* themesList[] = { "Default", "Hello Kitty", "Greens" };
+    themeDropdown = cuif_widget_create_dropdown(490.0f, 15.0f, 140.0f, 30.0f, themesList, 3, themeChangedCallback);
+    themeDropdown->user_data = (void*)(intptr_t)kParamUiTheme;
+    cuif_widget_add_child(rootContainer, themeDropdown);
 
     /* 4. Add Bezier EQ Node Editor */
     bezierEditor = cuif_widget_create_bezier_editor(30.0f, 180.0f, 340.0f, 220.0f, 3, bezierChangedCallback);
@@ -319,6 +340,12 @@ void LoudioReverbEditor::syncUIFromProcessor() {
     if (modeDropdown) {
         float rawVal = *processorRef.apvts.getRawParameterValue("mode");
         modeDropdown->u.dropdown.selected_index = (int)rawVal;
+    }
+
+    if (themeDropdown) {
+        int themeIndex = (int)*processorRef.apvts.getRawParameterValue("uiTheme");
+        themeDropdown->u.dropdown.selected_index = themeIndex;
+        cuif_set_theme(themeForUiThemeIndex(themeIndex));
     }
 
     if (bezierEditor) {

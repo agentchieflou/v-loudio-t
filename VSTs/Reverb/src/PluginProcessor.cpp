@@ -168,6 +168,7 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
                 case kParamDuckRelease: paramId = "duckRelease"; break;
                 case kParamGateThreshold: paramId = "gateThreshold"; break;
                 case kParamGateTime: paramId = "gateTime"; break;
+                case kParamUiTheme: paramId = "uiTheme"; break;
                 default: break;
             }
             if (paramId) {
@@ -490,6 +491,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout LoudioReverbProcessor::creat
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("gateTime", 1), "Gate Time", juce::NormalisableRange<float>(10.0f, 500.0f, 1.0f), 100.0f));
+
+    /* UI theme -- purely cosmetic, no audio effect, but persisted like any other setting via APVTS (#68). */
+    juce::StringArray uiThemes = { "Default", "Hello Kitty", "Greens" };
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("uiTheme", 1), "UI Theme", uiThemes, 0));
 
     return { params.begin(), params.end() };
 }

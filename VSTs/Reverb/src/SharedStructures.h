@@ -23,6 +23,7 @@ enum ReverbParamIndex {
     kParamDuckRelease,
     kParamGateThreshold,
     kParamGateTime,
+    kParamUiTheme,
     kNumParams
 };
 
