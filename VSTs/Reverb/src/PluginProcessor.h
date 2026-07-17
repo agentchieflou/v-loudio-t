@@ -5,6 +5,8 @@
 #include "AllPassDiffuser.h"
 #include "EarlyReflections.h"
 #include "OnePoleLPF.h"
+#include "Crossover.h"
+#include "EnvelopeDetector.h"
 
 class LoudioReverbProcessor : public juce::AudioProcessor {
 public:
@@ -49,7 +51,20 @@ private:
     EarlyReflections earlyReflectionsRight;
 
     DelayLine fdnDelayLines[8];
+    ThreeBandCrossover crossovers[8];
     OnePoleLPF fdnDampingFilters[8];
+
+    using PostEQChain = juce::dsp::ProcessorChain<juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Filter<float>>;
+    PostEQChain postEqLeft;
+    PostEQChain postEqRight;
+
+    EnvelopeDetector duckDetector;
+    EnvelopeDetector gateDetector;
+    
+    float gateFade = 1.0f;
+    float gateTimerMs = 0.0f;
+
+    void updatePostEQ();
 
     juce::LinearSmoothedValue<float> smoothedPreDelayMs;
     juce::LinearSmoothedValue<float> smoothedDecayTimeSec;
