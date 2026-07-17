@@ -100,6 +100,16 @@ cuif_widget* cuif_widget_create_analyzer(float x, float y, float w, float h, flo
     return widget;
 }
 
+cuif_widget* cuif_widget_create_tabbar(float x, float y, float w, float h, const char** labels, int tab_count, cuif_widget_value_changed_fn on_change) {
+    cuif_widget* widget = cuif_widget_create_base(CUIF_WIDGET_TABBAR, x, y, w, h);
+    if (!widget) return NULL;
+    widget->u.tabbar.tab_labels = labels;
+    widget->u.tabbar.tab_count = tab_count;
+    widget->u.tabbar.selected_index = 0;
+    widget->u.tabbar.on_change = on_change;
+    return widget;
+}
+
 void cuif_widget_destroy(cuif_widget* w) {
     if (!w) return;
     for (int i = 0; i < w->child_count; ++i) {
@@ -411,6 +421,32 @@ void cuif_widget_render(cuif_widget* w) {
             break;
         }
 
+        case CUIF_WIDGET_TABBAR: {
+            int count = w->u.tabbar.tab_count;
+            if (count <= 0) break;
+            float tab_w = w->w / (float)count;
+
+            for (int i = 0; i < count; ++i) {
+                float tx = w->x + i * tab_w;
+                bool selected = (i == w->u.tabbar.selected_index);
+                cuif_color tab_bg = selected ? theme_panel_bg : theme_bg_dark;
+                cuif_draw_rect(tx, w->y, tab_w, w->h, tab_bg, true);
+                cuif_draw_rect(tx, w->y, tab_w, w->h, theme_border, false);
+
+                if (selected) {
+                    cuif_draw_rect(tx, w->y + w->h - 2.0f, tab_w, 2.0f, theme_primary, true);
+                }
+
+                if (cuif_global_font && w->u.tabbar.tab_labels && w->u.tabbar.tab_labels[i]) {
+                    float label_len = (float)strlen(w->u.tabbar.tab_labels[i]);
+                    float lx = tx + (tab_w - label_len * 7.0f) * 0.5f;
+                    float ly = w->y + (w->h + 10.0f) * 0.5f;
+                    cuif_draw_text(cuif_global_font, w->u.tabbar.tab_labels[i], lx, ly, selected ? text_white : text_gray);
+                }
+            }
+            break;
+        }
+
         case CUIF_WIDGET_ANALYZER: {
             /* Draw dark grid background */
             cuif_draw_rect(w->x, w->y, w->w, w->h, theme_bg_dark, true);
@@ -555,6 +591,23 @@ void cuif_widget_dispatch_mouse_down(cuif_widget* root, float mx, float my, int 
             hit->u.dropdown.is_open = true;
             cuif_window_set_open_dropdown(cuif_current_window, hit);
             break;
+
+        case CUIF_WIDGET_TABBAR: {
+            int count = hit->u.tabbar.tab_count;
+            if (count <= 0) break;
+            float tab_w = hit->w / (float)count;
+            int idx = (int)((mx - hit->x) / tab_w);
+            if (idx < 0) idx = 0;
+            if (idx >= count) idx = count - 1;
+
+            if (idx != hit->u.tabbar.selected_index) {
+                hit->u.tabbar.selected_index = idx;
+                if (hit->u.tabbar.on_change) {
+                    hit->u.tabbar.on_change(hit, (float)idx);
+                }
+            }
+            break;
+        }
 
         case CUIF_WIDGET_BEZIER_EDITOR: {
             int count = hit->u.bezier_editor.node_count;
