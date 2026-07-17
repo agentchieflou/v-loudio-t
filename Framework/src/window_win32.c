@@ -138,7 +138,92 @@ static bool cuif_register_class_once(HINSTANCE hinstance) {
     return true;
 }
 
+/*
+ * MSAA support (#80). GL/wglext.h isn't vendored in this environment, so
+ * the WGL_ARB_multisample constants and the one function pointer type we
+ * need are defined locally rather than pulling in a GL loader dependency
+ * for this alone -- standard practice for a single-extension use case.
+ */
+#ifndef WGL_DRAW_TO_WINDOW_ARB
+#define WGL_DRAW_TO_WINDOW_ARB 0x2001
+#define WGL_SUPPORT_OPENGL_ARB 0x2010
+#define WGL_DOUBLE_BUFFER_ARB  0x2011
+#define WGL_PIXEL_TYPE_ARB     0x2013
+#define WGL_TYPE_RGBA_ARB      0x202B
+#define WGL_COLOR_BITS_ARB     0x2014
+#define WGL_DEPTH_BITS_ARB     0x2022
+#define WGL_STENCIL_BITS_ARB   0x2023
+#define WGL_SAMPLE_BUFFERS_ARB 0x2041
+#define WGL_SAMPLES_ARB        0x2042
+#endif
+#ifndef GL_MULTISAMPLE
+#define GL_MULTISAMPLE 0x809D /* not in the GL 1.1-era gl/gl.h Windows ships */
+#endif
+
+typedef BOOL(WINAPI* PFNCUIFWGLCHOOSEPIXELFORMATARBPROC)(HDC hdc, const int* piAttribIList, const FLOAT* pfAttribFList, UINT nMaxFormats, int* piFormats, UINT* nNumFormats);
+
+#define CUIF_MSAA_SAMPLES 4
+
+/* Resolved once per process (mirrors the cuif_class_registered pattern below) -- this plugin can have several simultaneous instances, each calling cuif_window_create, and the dummy-context bootstrap this requires must not repeat per instance. */
+static bool cuif_wgl_ext_probed = false;
+static PFNCUIFWGLCHOOSEPIXELFORMATARBPROC cuif_wglChoosePixelFormatARB = NULL;
+
+static void cuif_probe_wgl_multisample_support(void) {
+    if (cuif_wgl_ext_probed) return;
+    cuif_wgl_ext_probed = true; /* only ever attempt this once, success or not */
+
+    HINSTANCE hinstance = GetModuleHandleW(NULL);
+
+    WNDCLASSW dummy_wc = {0};
+    dummy_wc.lpfnWndProc = DefWindowProcW;
+    dummy_wc.hInstance = hinstance;
+    dummy_wc.lpszClassName = L"cuif_wgl_probe_class";
+    if (!RegisterClassW(&dummy_wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        CUIF_LOG("MSAA probe: RegisterClassW for dummy window failed: error %lu", GetLastError());
+        return;
+    }
+
+    HWND dummy_hwnd = CreateWindowExW(0, dummy_wc.lpszClassName, L"", 0, 0, 0, 1, 1, NULL, NULL, hinstance, NULL);
+    if (!dummy_hwnd) {
+        CUIF_LOG("MSAA probe: dummy CreateWindowExW failed: error %lu", GetLastError());
+        UnregisterClassW(dummy_wc.lpszClassName, hinstance);
+        return;
+    }
+
+    HDC dummy_hdc = GetDC(dummy_hwnd);
+    PIXELFORMATDESCRIPTOR pfd = {0};
+    pfd.nSize = sizeof(pfd);
+    pfd.nVersion = 1;
+    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+    pfd.iPixelType = PFD_TYPE_RGBA;
+    pfd.cColorBits = 32;
+    pfd.cDepthBits = 24;
+    pfd.cStencilBits = 8;
+
+    int dummy_pf = ChoosePixelFormat(dummy_hdc, &pfd);
+    if (dummy_pf != 0 && SetPixelFormat(dummy_hdc, dummy_pf, &pfd)) {
+        HGLRC dummy_glrc = wglCreateContext(dummy_hdc);
+        if (dummy_glrc) {
+            /* wglGetProcAddress only resolves valid pointers with a context current. */
+            if (wglMakeCurrent(dummy_hdc, dummy_glrc)) {
+                cuif_wglChoosePixelFormatARB = (PFNCUIFWGLCHOOSEPIXELFORMATARBPROC)wglGetProcAddress("wglChoosePixelFormatARB");
+                wglMakeCurrent(NULL, NULL);
+                CUIF_LOG("MSAA probe: wglChoosePixelFormatARB = %p", (void*)cuif_wglChoosePixelFormatARB);
+            }
+            wglDeleteContext(dummy_glrc);
+        }
+    } else {
+        CUIF_LOG("MSAA probe: dummy pixel format setup failed: error %lu", GetLastError());
+    }
+
+    ReleaseDC(dummy_hwnd, dummy_hdc);
+    DestroyWindow(dummy_hwnd);
+    UnregisterClassW(dummy_wc.lpszClassName, hinstance);
+}
+
 static bool cuif_init_gl_context(cuif_window* window) {
+    cuif_probe_wgl_multisample_support();
+
     PIXELFORMATDESCRIPTOR pfd = {0};
     pfd.nSize = sizeof(pfd);
     pfd.nVersion = 1;
@@ -149,11 +234,45 @@ static bool cuif_init_gl_context(cuif_window* window) {
     pfd.cStencilBits = 8;
     pfd.iLayerType = PFD_MAIN_PLANE;
 
-    int pixel_format = ChoosePixelFormat(window->hdc, &pfd);
-    if (pixel_format == 0) {
-        CUIF_LOG("ChoosePixelFormat failed: error %lu", GetLastError());
-        return false;
+    int pixel_format = 0;
+
+    if (cuif_wglChoosePixelFormatARB) {
+        int attribs[] = {
+            WGL_DRAW_TO_WINDOW_ARB, TRUE,
+            WGL_SUPPORT_OPENGL_ARB, TRUE,
+            WGL_DOUBLE_BUFFER_ARB, TRUE,
+            WGL_PIXEL_TYPE_ARB, WGL_TYPE_RGBA_ARB,
+            WGL_COLOR_BITS_ARB, 32,
+            WGL_DEPTH_BITS_ARB, 24,
+            WGL_STENCIL_BITS_ARB, 8,
+            WGL_SAMPLE_BUFFERS_ARB, 1,
+            WGL_SAMPLES_ARB, CUIF_MSAA_SAMPLES,
+            0
+        };
+        UINT num_formats = 0;
+        if (cuif_wglChoosePixelFormatARB(window->hdc, attribs, NULL, 1, &pixel_format, &num_formats) && num_formats > 0) {
+            CUIF_LOG("Resolved a %dx MSAA pixel format via WGL_ARB_multisample.", CUIF_MSAA_SAMPLES);
+        } else {
+            CUIF_LOG("wglChoosePixelFormatARB found no MSAA-capable format; falling back to the plain pixel format.");
+            pixel_format = 0;
+        }
     }
+
+    if (pixel_format == 0) {
+        pixel_format = ChoosePixelFormat(window->hdc, &pfd);
+        if (pixel_format == 0) {
+            CUIF_LOG("ChoosePixelFormat failed: error %lu", GetLastError());
+            return false;
+        }
+    }
+
+    /*
+     * The PFD passed here is descriptive only once pixel_format was chosen
+     * via the ARB path above -- Windows uses the format index, not this
+     * struct's contents, in that case. Reusing the plain pfd we already
+     * built is the standard pattern (matches e.g. the well-known NeHe/
+     * arcsynthesis WGL multisample tutorials).
+     */
     if (!SetPixelFormat(window->hdc, pixel_format, &pfd)) {
         CUIF_LOG("SetPixelFormat failed: error %lu", GetLastError());
         return false;
@@ -332,6 +451,8 @@ void cuif_window_render_frame(cuif_window* window) {
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    /* No-op if the pixel format has no multisample buffers (MSAA unavailable/fallback path). */
+    glEnable(GL_MULTISAMPLE);
 
     /*
      * Always clear to a defined background color first -- without this,
