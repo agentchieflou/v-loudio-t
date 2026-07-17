@@ -157,16 +157,9 @@ static cuif_widget* hit_test(cuif_widget* w, float mx, float my) {
 
 /* Draw a circular arc */
 static void draw_arc(float cx, float cy, float r, float start_angle, float end_angle, float thickness, cuif_color color) {
-    glColor4f(color.r, color.g, color.b, color.a);
-    glLineWidth(thickness);
-    glBegin(GL_LINE_STRIP);
-    float dpi_scale = cuif_current_window ? cuif_window_get_dpi_scale(cuif_current_window) : 1.0f;
-    int segments = cuif_arc_segment_count(r * dpi_scale, fabsf(end_angle - start_angle));
-    for (int i = 0; i <= segments; ++i) {
-        float theta = start_angle + (end_angle - start_angle) * ((float)i / segments);
-        glVertex2f(cx + r * cosf(theta), cy + r * sinf(theta));
-    }
-    glEnd();
+    float points[CUIF_MAX_ARC_POINTS * 2];
+    int point_count = cuif_generate_arc_points(cx, cy, r, start_angle, end_angle, points, CUIF_MAX_ARC_POINTS);
+    cuif_draw_polyline(points, point_count, thickness, color, false);
 }
 
 /* Catmull-Rom spline interpolation helper */
@@ -356,11 +349,7 @@ void cuif_widget_render(cuif_widget* w) {
             int count = w->u.bezier_editor.node_count;
             float* xs = w->u.bezier_editor.node_x;
             float* ys = w->u.bezier_editor.node_y;
-            
-            /* Render curve line by evaluating Catmull-Rom spline */
-            glColor4f(theme_primary.r, theme_primary.g, theme_primary.b, theme_primary.a);
-            glLineWidth(3.0f);
-            
+
             /* We will draw a filled gradient area beneath the curve for visual flare! */
             glBegin(GL_QUAD_STRIP);
             int segments_per_segment = 24;
@@ -394,26 +383,35 @@ void cuif_widget_render(cuif_widget* w) {
             glEnd();
             
             /* Draw the solid curve stroke */
-            glBegin(GL_LINE_STRIP);
-            glColor4f(theme_primary.r, theme_primary.g, theme_primary.b, 1.0f);
-            for (int i = 0; i < count - 1; ++i) {
-                float p0x = (i == 0) ? (2.0f * xs[0] - xs[1]) : xs[i - 1];
-                float p0y = (i == 0) ? (2.0f * ys[0] - ys[1]) : ys[i - 1];
-                float p1x = xs[i];
-                float p1y = ys[i];
-                float p2x = xs[i + 1];
-                float p2y = ys[i + 1];
-                float p3x = (i + 2 >= count) ? (2.0f * xs[count - 1] - xs[count - 2]) : xs[i + 2];
-                float p3y = (i + 2 >= count) ? (2.0f * ys[count - 1] - ys[count - 2]) : ys[i + 2];
-                
-                for (int j = 0; j <= segments_per_segment; ++j) {
-                    float t = (float)j / segments_per_segment;
-                    float cx = evaluate_catmull_rom(p0x, p1x, p2x, p3x, t);
-                    float cy = evaluate_catmull_rom(p0y, p1y, p2y, p3y, t);
-                    glVertex2f(w->x + cx * w->w, w->y + cy * w->h);
+            {
+                /* Worst case: 7 catmull-rom segments (node_x/node_y cap at 8 nodes) * 25 samples each. */
+                float curve_points[175 * 2];
+                int curve_point_count = 0;
+
+                for (int i = 0; i < count - 1; ++i) {
+                    float p0x = (i == 0) ? (2.0f * xs[0] - xs[1]) : xs[i - 1];
+                    float p0y = (i == 0) ? (2.0f * ys[0] - ys[1]) : ys[i - 1];
+                    float p1x = xs[i];
+                    float p1y = ys[i];
+                    float p2x = xs[i + 1];
+                    float p2y = ys[i + 1];
+                    float p3x = (i + 2 >= count) ? (2.0f * xs[count - 1] - xs[count - 2]) : xs[i + 2];
+                    float p3y = (i + 2 >= count) ? (2.0f * ys[count - 1] - ys[count - 2]) : ys[i + 2];
+
+                    for (int j = 0; j <= segments_per_segment; ++j) {
+                        float t = (float)j / segments_per_segment;
+                        float cx = evaluate_catmull_rom(p0x, p1x, p2x, p3x, t);
+                        float cy = evaluate_catmull_rom(p0y, p1y, p2y, p3y, t);
+                        if (curve_point_count < 175) {
+                            curve_points[curve_point_count * 2] = w->x + cx * w->w;
+                            curve_points[curve_point_count * 2 + 1] = w->y + cy * w->h;
+                            curve_point_count++;
+                        }
+                    }
                 }
+
+                cuif_draw_polyline(curve_points, curve_point_count, 3.0f, cuif_rgba(theme_primary.r, theme_primary.g, theme_primary.b, 1.0f), false);
             }
-            glEnd();
             
             /* Draw nodes */
             for (int i = 0; i < count; ++i) {
@@ -489,19 +487,24 @@ void cuif_widget_render(cuif_widget* w) {
                     glVertex2f(bx, w->y + w->h);
                 }
                 glEnd();
-                
+
                 /* Render solid stroke path */
-                glLineWidth(2.0f);
-                glColor4f(col.r, col.g, col.b, 1.0f);
-                glBegin(GL_LINE_STRIP);
-                for (int i = 0; i < size; ++i) {
-                    float bx = w->x + (float)i / (size - 1) * w->w;
-                    float by = w->y + w->h - buf[i] * w->h;
-                    if (by < w->y) by = w->y;
-                    if (by > w->y + w->h) by = w->y + w->h;
-                    glVertex2f(bx, by);
+                {
+                    /* buffer_size is 64 in practice (see PluginEditor.cpp); generous headroom for any future FFT resolution. */
+                    float trace_points[512 * 2];
+                    int trace_point_count = size < 512 ? size : 512;
+
+                    for (int i = 0; i < trace_point_count; ++i) {
+                        float bx = w->x + (float)i / (size - 1) * w->w;
+                        float by = w->y + w->h - buf[i] * w->h;
+                        if (by < w->y) by = w->y;
+                        if (by > w->y + w->h) by = w->y + w->h;
+                        trace_points[i * 2] = bx;
+                        trace_points[i * 2 + 1] = by;
+                    }
+
+                    cuif_draw_polyline(trace_points, trace_point_count, 2.0f, cuif_rgba(col.r, col.g, col.b, 1.0f), false);
                 }
-                glEnd();
             }
             break;
         }
