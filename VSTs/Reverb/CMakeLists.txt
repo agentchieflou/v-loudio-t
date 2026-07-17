@@ -11,7 +11,7 @@ juce_add_plugin(LoudioReverb
     COMPANY_NAME "Loudio"
     PLUGIN_MANUFACTURER_CODE Loud
     PLUGIN_CODE Rvb1
-    FORMATS VST3
+    FORMATS VST3 Standalone
     VST3_CATEGORIES Fx Reverb
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
