@@ -20,6 +20,8 @@ public:
     LoudioReverbProcessor& processorRef;
 
 private:
+    void ensureCuifWindowCreated();
+
     cuif_window* myWindow = nullptr;
     cuif_widget* rootContainer = nullptr;
 
