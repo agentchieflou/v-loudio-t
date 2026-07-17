@@ -1,6 +1,7 @@
 #include "cuif/window.h"
 #include "cuif/widget.h"
 #include "cuif/theme.h"
+#include "cuif/cuif_dpi_utils.h"
 
 #include <windows.h>
 #include <gl/gl.h>
@@ -23,6 +24,10 @@ struct cuif_window {
     struct cuif_widget* root_widget;
     float last_mx;
     float last_my;
+
+    float dpi_scale;  /* always > 0; 1.0 = no scaling */
+    int logical_w;
+    int logical_h;
 
     struct cuif_widget* active_widget;
     struct cuif_widget* hovered_widget;
@@ -54,8 +59,13 @@ static LRESULT CALLBACK cuif_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
             return 0;
         }
         case WM_LBUTTONDOWN: {
-            float mx = (float)((int)(short)LOWORD(lparam));
-            float my = (float)((int)(short)HIWORD(lparam));
+            /*
+             * lparam is always physical/device pixels (Win32 window messages
+             * don't know about our logical coordinate space) -- widgets are
+             * laid out in logical pixels, so convert before dispatching.
+             */
+            float mx = cuif_physical_to_logical_px((float)((int)(short)LOWORD(lparam)), window->dpi_scale);
+            float my = cuif_physical_to_logical_px((float)((int)(short)HIWORD(lparam)), window->dpi_scale);
             window->last_mx = mx;
             window->last_my = my;
             SetCapture(hwnd);
@@ -65,8 +75,8 @@ static LRESULT CALLBACK cuif_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
             return 0;
         }
         case WM_LBUTTONUP: {
-            float mx = (float)((int)(short)LOWORD(lparam));
-            float my = (float)((int)(short)HIWORD(lparam));
+            float mx = cuif_physical_to_logical_px((float)((int)(short)LOWORD(lparam)), window->dpi_scale);
+            float my = cuif_physical_to_logical_px((float)((int)(short)HIWORD(lparam)), window->dpi_scale);
             ReleaseCapture();
             if (window->root_widget) {
                 cuif_widget_dispatch_mouse_up(window->root_widget, mx, my, 0);
@@ -74,8 +84,8 @@ static LRESULT CALLBACK cuif_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
             return 0;
         }
         case WM_MOUSEMOVE: {
-            float mx = (float)((int)(short)LOWORD(lparam));
-            float my = (float)((int)(short)HIWORD(lparam));
+            float mx = cuif_physical_to_logical_px((float)((int)(short)LOWORD(lparam)), window->dpi_scale);
+            float my = cuif_physical_to_logical_px((float)((int)(short)HIWORD(lparam)), window->dpi_scale);
             float dx = mx - window->last_mx;
             float dy = my - window->last_my;
             window->last_mx = mx;
@@ -86,13 +96,16 @@ static LRESULT CALLBACK cuif_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
             return 0;
         }
         case WM_SIZE: {
-            int w = LOWORD(lparam);
-            int h = HIWORD(lparam);
+            /* lparam here is also physical pixels -- track both for the projection/viewport split in render_frame. */
+            int physical_w = LOWORD(lparam);
+            int physical_h = HIWORD(lparam);
+            window->logical_w = (int)cuif_physical_to_logical_px((float)physical_w, window->dpi_scale);
+            window->logical_h = (int)cuif_physical_to_logical_px((float)physical_h, window->dpi_scale);
             if (window->root_widget) {
-                window->root_widget->w = (float)w;
-                window->root_widget->h = (float)h;
+                window->root_widget->w = (float)window->logical_w;
+                window->root_widget->h = (float)window->logical_h;
             }
-            glViewport(0, 0, w, h);
+            glViewport(0, 0, physical_w, physical_h);
             return 0;
         }
         case WM_DESTROY:
@@ -172,8 +185,15 @@ cuif_window* cuif_window_create(const cuif_window_desc* desc) {
         return NULL;
     }
 
-    int width = desc->width > 0 ? desc->width : 800;
-    int height = desc->height > 0 ? desc->height : 600;
+    int logical_width = desc->width > 0 ? desc->width : 800;
+    int logical_height = desc->height > 0 ? desc->height : 600;
+    float dpi_scale = desc->dpi_scale > 0.0f ? desc->dpi_scale : 1.0f;
+    int physical_width = cuif_logical_to_physical_px(logical_width, dpi_scale);
+    int physical_height = cuif_logical_to_physical_px(logical_height, dpi_scale);
+
+    window->dpi_scale = dpi_scale;
+    window->logical_w = logical_width;
+    window->logical_h = logical_height;
 
     wchar_t title_w[256] = L"cuif";
     if (desc->title) {
@@ -197,7 +217,7 @@ cuif_window* cuif_window_create(const cuif_window_desc* desc) {
 
     window->hwnd = CreateWindowExW(
         0, CUIF_WNDCLASS_NAME, title_w, style,
-        posX, posY, width, height,
+        posX, posY, physical_width, physical_height,
         parent, NULL, hinstance, NULL);
 
     if (!window->hwnd) {
@@ -273,10 +293,8 @@ void cuif_window_set_root_widget(cuif_window* window, struct cuif_widget* root) 
     if (!window) return;
     window->root_widget = root;
     if (root) {
-        RECT rect;
-        GetClientRect(window->hwnd, &rect);
-        root->w = (float)(rect.right - rect.left);
-        root->h = (float)(rect.bottom - rect.top);
+        root->w = (float)window->logical_w;
+        root->h = (float)window->logical_h;
     }
 }
 
@@ -295,13 +313,19 @@ void cuif_window_render_frame(cuif_window* window) {
 
     RECT rect;
     GetClientRect(window->hwnd, &rect);
-    int width = rect.right - rect.left;
-    int height = rect.bottom - rect.top;
+    int physical_width = rect.right - rect.left;
+    int physical_height = rect.bottom - rect.top;
 
-    glViewport(0, 0, width, height);
+    /*
+     * Viewport covers the full physical (device-pixel) framebuffer, but the
+     * projection stays in logical units -- this is what makes rendering
+     * happen at native pixel density on high-DPI displays without touching
+     * any widget layout/hit-test coordinates, which are all logical.
+     */
+    glViewport(0, 0, physical_width, physical_height);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    glOrtho(0.0, width, height, 0.0, -1.0, 1.0); /* Y-down coordinate space */
+    glOrtho(0.0, window->logical_w, window->logical_h, 0.0, -1.0, 1.0); /* Y-down coordinate space */
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 
@@ -342,6 +366,39 @@ void cuif_window_render_frame(cuif_window* window) {
 
 void* cuif_window_native_handle(cuif_window* window) {
     return window ? (void*)window->hwnd : NULL;
+}
+
+float cuif_window_get_dpi_scale(cuif_window* window) {
+    return window ? window->dpi_scale : 1.0f;
+}
+
+void cuif_window_set_dpi_scale(cuif_window* window, float scale) {
+    if (!window) return;
+    if (scale <= 0.0f) scale = 1.0f;
+    if (scale == window->dpi_scale) return;
+
+    window->dpi_scale = scale;
+    cuif_window_resize(window, window->logical_w, window->logical_h);
+}
+
+void cuif_window_resize(cuif_window* window, int logical_width, int logical_height) {
+    if (!window) return;
+
+    window->logical_w = logical_width;
+    window->logical_h = logical_height;
+
+    int physical_width = cuif_logical_to_physical_px(logical_width, window->dpi_scale);
+    int physical_height = cuif_logical_to_physical_px(logical_height, window->dpi_scale);
+
+    /* SWP_NOMOVE: resize only, never touch position -- correct for both a
+     * child window already positioned by its owner and a top-level window
+     * the user has moved. */
+    SetWindowPos(window->hwnd, NULL, 0, 0, physical_width, physical_height, SWP_NOMOVE | SWP_NOZORDER);
+
+    if (window->root_widget) {
+        window->root_widget->w = (float)logical_width;
+        window->root_widget->h = (float)logical_height;
+    }
 }
 
 struct cuif_widget* cuif_window_get_active_widget(cuif_window* w) {
