@@ -41,3 +41,9 @@ PUBLIC
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags
 )
+
+option(LOUDIO_REVERB_BUILD_TESTS "Build DSP unit tests executable" ON)
+if(LOUDIO_REVERB_BUILD_TESTS)
+    add_executable(dsp_tests src/DSPTests.cpp)
+    target_include_directories(dsp_tests PRIVATE src)
+endif()
