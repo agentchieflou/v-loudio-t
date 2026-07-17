@@ -29,6 +29,7 @@ target_sources(LoudioReverb PRIVATE
     ../../Framework/src/widget.c
     ../../Framework/src/window_win32.c
     ../../Framework/src/theme.c
+    ../../Framework/src/theme_hello_kitty.c
 )
 
 target_include_directories(LoudioReverb PRIVATE src ../../Framework/include)

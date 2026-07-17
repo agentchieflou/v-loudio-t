@@ -1,5 +1,6 @@
 #include "cuif/window.h"
 #include "cuif/widget.h"
+#include "cuif/theme.h"
 
 #include <windows.h>
 #include <gl/gl.h>
@@ -312,9 +313,12 @@ void cuif_window_render_frame(cuif_window* window) {
      * Always clear to a defined background color first -- without this,
      * undrawn regions show whatever the swap buffer previously contained
      * (observed as a solid black editor when nothing else painted every
-     * pixel). See issue #62.
+     * pixel). See issue #62. Reads from the active theme (rather than a
+     * hardcoded color) so non-default themes (#66, #67) actually show
+     * their background outside the bezier/analyzer graph boxes.
      */
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    cuif_color bg = cuif_get_theme()->background;
+    glClearColor(bg.r, bg.g, bg.b, bg.a);
     glClear(GL_COLOR_BUFFER_BIT);
 
     if (window->render_fn) {
