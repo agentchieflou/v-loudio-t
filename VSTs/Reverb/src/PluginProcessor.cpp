@@ -8,6 +8,10 @@ LoudioReverbProcessor::LoudioReverbProcessor()
                           .withInput("Input", juce::AudioChannelSet::stereo(), true)
                           .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "Parameters", createParameterLayout()) {
+    
+    /* Initialize lock-free ring buffers with static pre-allocated storage */
+    cuif_spsc_init(&dspToUiRingBuffer, dspToUiStorage, 1024);
+    cuif_spsc_init(&uiToDspRingBuffer, uiToDspStorage, 1024);
 }
 
 void LoudioReverbProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
@@ -58,7 +62,7 @@ void LoudioReverbProcessor::prepareToPlay(double sampleRate, int samplesPerBlock
     float fc1 = *apvts.getRawParameterValue("crossoverLowMid");
     float fc2 = *apvts.getRawParameterValue("crossoverMidHigh");
     for (int i = 0; i < 8; ++i) {
-        int delayLen = (int)(baseDelayLengths[i] * rateScale * 1.5f); /* Extra padding for mode scaling */
+        int delayLen = (int)(baseDelayLengths[i] * rateScale * 1.5f);
         fdnDelayLines[i].prepare(delayLen + 2);
         fdnDampingFilters[i].prepare();
         crossovers[i].prepare();
@@ -80,7 +84,11 @@ void LoudioReverbProcessor::prepareToPlay(double sampleRate, int samplesPerBlock
     gateFade = 1.0f;
     gateTimerMs = 0.0f;
 
-    /* 7. Prepare parameter smoothing */
+    /* 7. Prepare Real-Time FFT Analyzers */
+    fftAnalyzerLeft.prepare(sampleRate);
+    fftAnalyzerRight.prepare(sampleRate);
+
+    /* 8. Prepare parameter smoothing */
     smoothedPreDelayMs.reset(sampleRate, 0.02);
     smoothedDecayTimeSec.reset(sampleRate, 0.02);
     smoothedDamping.reset(sampleRate, 0.02);
@@ -131,6 +139,43 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
 
     if (buffer.getNumChannels() < 2) return;
 
+    /* A. Read UI-to-DSP Parameter Updates from SPSC Ring Buffer */
+    ParamUpdateMessage paramMsg;
+    while (cuif_spsc_readable(&uiToDspRingBuffer) >= sizeof(ParamUpdateMessage)) {
+        size_t read_bytes = cuif_spsc_read(&uiToDspRingBuffer, (unsigned char*)&paramMsg, sizeof(ParamUpdateMessage));
+        if (read_bytes == sizeof(ParamUpdateMessage)) {
+            const char* paramId = nullptr;
+            switch (paramMsg.index) {
+                case kParamPreDelay: paramId = "preDelay"; break;
+                case kParamDecayTime: paramId = "decayTime"; break;
+                case kParamDamping: paramId = "damping"; break;
+                case kParamWidth: paramId = "width"; break;
+                case kParamDryWet: paramId = "dryWet"; break;
+                case kParamDistance: paramId = "distance"; break;
+                case kParamThickness: paramId = "thickness"; break;
+                case kParamFreeze: paramId = "freeze"; break;
+                case kParamMode: paramId = "mode"; break;
+                case kParamDecayLow: paramId = "decayLow"; break;
+                case kParamDecayMid: paramId = "decayMid"; break;
+                case kParamDecayHigh: paramId = "decayHigh"; break;
+                case kParamCrossoverLowMid: paramId = "crossoverLowMid"; break;
+                case kParamCrossoverMidHigh: paramId = "crossoverMidHigh"; break;
+                case kParamPostEqLowGain: paramId = "postEqLowGain"; break;
+                case kParamPostEqMidGain: paramId = "postEqMidGain"; break;
+                case kParamPostEqHighGain: paramId = "postEqHighGain"; break;
+                case kParamDuckThreshold: paramId = "duckThreshold"; break;
+                case kParamDuckAmount: paramId = "duckAmount"; break;
+                case kParamDuckRelease: paramId = "duckRelease"; break;
+                case kParamGateThreshold: paramId = "gateThreshold"; break;
+                case kParamGateTime: paramId = "gateTime"; break;
+                default: break;
+            }
+            if (paramId) {
+                *apvts.getRawParameterValue(paramId) = paramMsg.value;
+            }
+        }
+    }
+
     int numSamples = buffer.getNumSamples();
     float* leftChannel = buffer.getWritePointer(0);
     float* rightChannel = buffer.getWritePointer(1);
@@ -173,13 +218,12 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
 
     float rateScale = (float)(currentSampleRate / 44100.0f);
 
-    /* 1. Character mode size multiplier */
     float modeScale = 1.0f;
-    if (mode == 0)      modeScale = 0.6f;  /* Room */
-    else if (mode == 1) modeScale = 1.0f;  /* Hall */
-    else if (mode == 2) modeScale = 0.75f; /* Plate */
-    else if (mode == 3) modeScale = 1.5f;  /* Cathedral */
-    else if (mode == 4) modeScale = 0.85f; /* Spring */
+    if (mode == 0)      modeScale = 0.6f;
+    else if (mode == 1) modeScale = 1.0f;
+    else if (mode == 2) modeScale = 0.75f;
+    else if (mode == 3) modeScale = 1.5f;
+    else if (mode == 4) modeScale = 0.85f;
 
     for (int sample = 0; sample < numSamples; ++sample) {
         float preDelayMs = smoothedPreDelayMs.getNextValue();
@@ -241,7 +285,6 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
             float g_mid = loopGains[i] * decayMid;
             float g_high = loopGains[i] * decayHigh;
 
-            /* Limit loop gains under unity for feedback stability */
             if (g_low > 0.999f && !freeze) g_low = 0.999f;
             if (g_mid > 0.999f && !freeze) g_mid = 0.999f;
             if (g_high > 0.999f && !freeze) g_high = 0.999f;
@@ -295,7 +338,7 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
         float outWetL = (1.0f - distance) * earlyL + distance * wetL;
         float outWetR = (1.0f - distance) * earlyR + distance * wetR;
 
-        /* Stereo width Mid/Side adjust */
+        /* Stereo Width mid/side adjust */
         float mid = (outWetL + outWetR) * 0.5f;
         float side = (outWetL - outWetR) * 0.5f;
         float adjustedSide = side * width;
@@ -318,11 +361,11 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
         if (wetLevelDb < gateThreshold) {
             gateTimerMs += (1000.0f / (float)currentSampleRate);
             if (gateTimerMs >= gateTime) {
-                gateFade = std::max(0.0f, gateFade - 0.002f);
+                gateFade = juce::jmax(0.0f, gateFade - 0.002f);
             }
         } else {
             gateTimerMs = 0.0f;
-            gateFade = std::min(1.0f, gateFade + 0.005f);
+            gateFade = juce::jmin(1.0f, gateFade + 0.005f);
         }
         outWetL *= gateFade;
         outWetR *= gateFade;
@@ -330,6 +373,27 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
         /* Global mix */
         leftChannel[sample] = (1.0f - dryWet) * inL + dryWet * outWetL;
         rightChannel[sample] = (1.0f - dryWet) * inR + dryWet * outWetR;
+
+        /* B. Feed Output Samples to Real-Time FFT Analyzers & Push to SPSC Ring Buffer */
+        if (fftAnalyzerLeft.pushSample(outWetL)) {
+            std::vector<float> magnitudes(64);
+            fftAnalyzerLeft.getMagnitudes(magnitudes);
+            unsigned char channelId = 'L';
+            if (cuif_spsc_writable(&dspToUiRingBuffer) >= sizeof(channelId) + magnitudes.size() * sizeof(float)) {
+                cuif_spsc_write(&dspToUiRingBuffer, &channelId, sizeof(channelId));
+                cuif_spsc_write(&dspToUiRingBuffer, (const unsigned char*)magnitudes.data(), magnitudes.size() * sizeof(float));
+            }
+        }
+
+        if (fftAnalyzerRight.pushSample(outWetR)) {
+            std::vector<float> magnitudes(64);
+            fftAnalyzerRight.getMagnitudes(magnitudes);
+            unsigned char channelId = 'R';
+            if (cuif_spsc_writable(&dspToUiRingBuffer) >= sizeof(channelId) + magnitudes.size() * sizeof(float)) {
+                cuif_spsc_write(&dspToUiRingBuffer, &channelId, sizeof(channelId));
+                cuif_spsc_write(&dspToUiRingBuffer, (const unsigned char*)magnitudes.data(), magnitudes.size() * sizeof(float));
+            }
+        }
     }
 }
 
