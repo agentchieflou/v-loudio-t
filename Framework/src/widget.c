@@ -11,10 +11,9 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#include "cuif/window.h"
+
 cuif_font* cuif_global_font = NULL;
-cuif_widget* cuif_active_widget = NULL;
-cuif_widget* cuif_hovered_widget = NULL;
-cuif_widget* cuif_open_dropdown = NULL;
 
 static cuif_widget* cuif_widget_create_base(cuif_widget_type type, float x, float y, float w, float h) {
     cuif_widget* widget = (cuif_widget*)calloc(1, sizeof(cuif_widget));
@@ -107,9 +106,11 @@ void cuif_widget_destroy(cuif_widget* w) {
         cuif_widget_destroy(w->children[i]);
     }
     free(w->children);
-    if (cuif_active_widget == w) cuif_active_widget = NULL;
-    if (cuif_hovered_widget == w) cuif_hovered_widget = NULL;
-    if (cuif_open_dropdown == w) cuif_open_dropdown = NULL;
+    if (cuif_current_window) {
+        if (cuif_window_get_active_widget(cuif_current_window) == w) cuif_window_set_active_widget(cuif_current_window, NULL);
+        if (cuif_window_get_hovered_widget(cuif_current_window) == w) cuif_window_set_hovered_widget(cuif_current_window, NULL);
+        if (cuif_window_get_open_dropdown(cuif_current_window) == w) cuif_window_set_open_dropdown(cuif_current_window, NULL);
+    }
     free(w);
 }
 
@@ -466,47 +467,51 @@ void cuif_widget_render(cuif_widget* w) {
     }
 
     /* Render children */
+    cuif_widget* open_dropdown = cuif_current_window ? cuif_window_get_open_dropdown(cuif_current_window) : NULL;
     for (int i = 0; i < w->child_count; ++i) {
-        if (w->children[i]->visible && w->children[i] != cuif_open_dropdown) {
+        if (w->children[i]->visible && w->children[i] != open_dropdown) {
             cuif_widget_render(w->children[i]);
         }
     }
 
     /* If we are the root window view container, draw open dropdown overlay last */
-    if (!w->parent && cuif_open_dropdown) {
-        draw_dropdown_overlay(cuif_open_dropdown);
+    if (!w->parent && open_dropdown) {
+        draw_dropdown_overlay(open_dropdown);
     }
 }
 
 void cuif_widget_dispatch_mouse_down(cuif_widget* root, float mx, float my, int button) {
+    if (!cuif_current_window) return;
+
     /* Close dropdown if we click elsewhere */
-    if (cuif_open_dropdown) {
+    cuif_widget* open_dropdown = cuif_window_get_open_dropdown(cuif_current_window);
+    if (open_dropdown) {
         float item_h = 24.0f;
-        float overlay_h = cuif_open_dropdown->u.dropdown.item_count * item_h;
-        bool in_overlay = mx >= cuif_open_dropdown->x && mx <= cuif_open_dropdown->x + cuif_open_dropdown->w &&
-                          my >= cuif_open_dropdown->y + cuif_open_dropdown->h && my <= cuif_open_dropdown->y + cuif_open_dropdown->h + overlay_h;
+        float overlay_h = open_dropdown->u.dropdown.item_count * item_h;
+        bool in_overlay = mx >= open_dropdown->x && mx <= open_dropdown->x + open_dropdown->w &&
+                          my >= open_dropdown->y + open_dropdown->h && my <= open_dropdown->y + open_dropdown->h + overlay_h;
         
         if (in_overlay) {
-            int idx = (int)((my - (cuif_open_dropdown->y + cuif_open_dropdown->h)) / item_h);
-            if (idx >= 0 && idx < cuif_open_dropdown->u.dropdown.item_count) {
-                cuif_open_dropdown->u.dropdown.selected_index = idx;
-                if (cuif_open_dropdown->u.dropdown.on_change) {
-                    cuif_open_dropdown->u.dropdown.on_change(cuif_open_dropdown, (float)idx);
+            int idx = (int)((my - (open_dropdown->y + open_dropdown->h)) / item_h);
+            if (idx >= 0 && idx < open_dropdown->u.dropdown.item_count) {
+                open_dropdown->u.dropdown.selected_index = idx;
+                if (open_dropdown->u.dropdown.on_change) {
+                    open_dropdown->u.dropdown.on_change(open_dropdown, (float)idx);
                 }
             }
-            cuif_open_dropdown->u.dropdown.is_open = false;
-            cuif_open_dropdown = NULL;
+            open_dropdown->u.dropdown.is_open = false;
+            cuif_window_set_open_dropdown(cuif_current_window, NULL);
             return;
         } else {
-            cuif_open_dropdown->u.dropdown.is_open = false;
-            cuif_open_dropdown = NULL;
+            open_dropdown->u.dropdown.is_open = false;
+            cuif_window_set_open_dropdown(cuif_current_window, NULL);
         }
     }
 
     cuif_widget* hit = hit_test(root, mx, my);
     if (!hit) return;
 
-    cuif_active_widget = hit;
+    cuif_window_set_active_widget(cuif_current_window, hit);
 
     switch (hit->type) {
         case CUIF_WIDGET_KNOB:
@@ -548,7 +553,7 @@ void cuif_widget_dispatch_mouse_down(cuif_widget* root, float mx, float my, int 
 
         case CUIF_WIDGET_DROPDOWN:
             hit->u.dropdown.is_open = true;
-            cuif_open_dropdown = hit;
+            cuif_window_set_open_dropdown(cuif_current_window, hit);
             break;
 
         case CUIF_WIDGET_BEZIER_EDITOR: {
@@ -584,10 +589,11 @@ void cuif_widget_dispatch_mouse_up(cuif_widget* root, float mx, float my, int bu
     (void)my;
     (void)button;
 
-    if (!cuif_active_widget) return;
+    if (!cuif_current_window) return;
+    cuif_widget* w = cuif_window_get_active_widget(cuif_current_window);
+    if (!w) return;
 
-    cuif_widget* w = cuif_active_widget;
-    cuif_active_widget = NULL;
+    cuif_window_set_active_widget(cuif_current_window, NULL);
 
     switch (w->type) {
         case CUIF_WIDGET_KNOB:
@@ -626,8 +632,9 @@ void cuif_widget_dispatch_mouse_move(cuif_widget* root, float mx, float my, floa
     (void)dy;
     (void)button;
 
-    if (!cuif_active_widget) return;
-    cuif_widget* w = cuif_active_widget;
+    if (!cuif_current_window) return;
+    cuif_widget* w = cuif_window_get_active_widget(cuif_current_window);
+    if (!w) return;
 
     switch (w->type) {
         case CUIF_WIDGET_KNOB: {

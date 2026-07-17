@@ -224,6 +224,11 @@ void LoudioReverbEditor::resized() {
 
                 cuif_window_set_root_widget(myWindow, rootContainer);
                 syncUIFromProcessor();
+
+                HWND childHwnd = (HWND)cuif_window_native_handle(myWindow);
+                if (childHwnd != NULL) {
+                    MoveWindow(childHwnd, 0, 0, getWidth(), getHeight(), TRUE);
+                }
             }
         }
     } else {

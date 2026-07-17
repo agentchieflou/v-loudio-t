@@ -15,13 +15,21 @@ struct cuif_window {
     struct cuif_widget* root_widget;
     float last_mx;
     float last_my;
+
+    struct cuif_widget* active_widget;
+    struct cuif_widget* hovered_widget;
+    struct cuif_widget* open_dropdown;
 };
+
+cuif_window* cuif_current_window = NULL;
 
 static const wchar_t* CUIF_WNDCLASS_NAME = L"cuif_window_class";
 
 static LRESULT CALLBACK cuif_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     cuif_window* window = (cuif_window*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     if (!window) return DefWindowProcW(hwnd, msg, wparam, lparam);
+
+    cuif_current_window = window;
 
     switch (msg) {
         case WM_CLOSE:
@@ -128,11 +136,13 @@ cuif_window* cuif_window_create(const cuif_window_desc* desc) {
     }
 
     HWND parent = (HWND)desc->parent_native_handle;
-    DWORD style = parent ? WS_CHILD | WS_VISIBLE : WS_OVERLAPPEDWINDOW | WS_VISIBLE;
+    DWORD style = parent ? WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN : WS_OVERLAPPEDWINDOW | WS_VISIBLE;
+    int posX = parent ? 0 : CW_USEDEFAULT;
+    int posY = parent ? 0 : CW_USEDEFAULT;
 
     window->hwnd = CreateWindowExW(
         0, CUIF_WNDCLASS_NAME, title_w, style,
-        CW_USEDEFAULT, CW_USEDEFAULT, width, height,
+        posX, posY, width, height,
         parent, NULL, hinstance, NULL);
 
     if (!window->hwnd) {
@@ -197,6 +207,8 @@ void cuif_window_set_root_widget(cuif_window* window, struct cuif_widget* root) 
 void cuif_window_render_frame(cuif_window* window) {
     if (!window || !window->glrc) return;
 
+    cuif_current_window = window;
+
     wglMakeCurrent(window->hdc, window->glrc);
 
     RECT rect;
@@ -224,4 +236,28 @@ void cuif_window_render_frame(cuif_window* window) {
 
 void* cuif_window_native_handle(cuif_window* window) {
     return window ? (void*)window->hwnd : NULL;
+}
+
+struct cuif_widget* cuif_window_get_active_widget(cuif_window* w) {
+    return w ? w->active_widget : NULL;
+}
+
+void cuif_window_set_active_widget(cuif_window* w, struct cuif_widget* widget) {
+    if (w) w->active_widget = widget;
+}
+
+struct cuif_widget* cuif_window_get_hovered_widget(cuif_window* w) {
+    return w ? w->hovered_widget : NULL;
+}
+
+void cuif_window_set_hovered_widget(cuif_window* w, struct cuif_widget* widget) {
+    if (w) w->hovered_widget = widget;
+}
+
+struct cuif_widget* cuif_window_get_open_dropdown(cuif_window* w) {
+    return w ? w->open_dropdown : NULL;
+}
+
+void cuif_window_set_open_dropdown(cuif_window* w, struct cuif_widget* widget) {
+    if (w) w->open_dropdown = widget;
 }

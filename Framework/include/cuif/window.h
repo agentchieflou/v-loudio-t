@@ -41,6 +41,15 @@ void cuif_window_render_frame(cuif_window* window);
 
 void* cuif_window_native_handle(cuif_window* window);
 
+struct cuif_widget* cuif_window_get_active_widget(cuif_window* w);
+void cuif_window_set_active_widget(cuif_window* w, struct cuif_widget* widget);
+struct cuif_widget* cuif_window_get_hovered_widget(cuif_window* w);
+void cuif_window_set_hovered_widget(cuif_window* w, struct cuif_widget* widget);
+struct cuif_widget* cuif_window_get_open_dropdown(cuif_window* w);
+void cuif_window_set_open_dropdown(cuif_window* w, struct cuif_widget* widget);
+
+extern cuif_window* cuif_current_window;
+
 #ifdef __cplusplus
 }
 #endif
