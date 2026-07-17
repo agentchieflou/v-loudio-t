@@ -1,9 +1,17 @@
 #include "cuif/cuif.h"
 #include "cuif/widget.h"
+#include "cuif/theme.h"
 
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
+
+static bool colorsEqual(cuif_color a, cuif_color b) {
+    const float eps = 1e-6f;
+    return fabsf(a.r - b.r) < eps && fabsf(a.g - b.g) < eps &&
+           fabsf(a.b - b.b) < eps && fabsf(a.a - b.a) < eps;
+}
 
 /*
  * Plain-C, assert()-based unit tests for the cuif framework, mirroring the
@@ -111,6 +119,47 @@ static void testTabbarClickingSelectedTabDoesNotRefire(void) {
     printf("  Clicking the already-selected tab does not refire on_change. Pass.\n");
 }
 
+static void testDefaultThemeIsActiveInitially(void) {
+    printf("Running testDefaultThemeIsActiveInitially...\n");
+
+    const cuif_theme* active = cuif_get_theme();
+    assert(active != NULL);
+    assert(colorsEqual(active->primary, CUIF_THEME_DEFAULT.primary));
+    assert(colorsEqual(active->background, CUIF_THEME_DEFAULT.background));
+
+    printf("  cuif_get_theme() returns CUIF_THEME_DEFAULT before any cuif_set_theme() call. Pass.\n");
+}
+
+static void testSetThemeChangesActiveTheme(void) {
+    printf("Running testSetThemeChangesActiveTheme...\n");
+
+    cuif_theme custom = CUIF_THEME_DEFAULT;
+    custom.primary = cuif_rgb(1.0f, 0.0f, 0.0f);
+
+    cuif_set_theme(&custom);
+    const cuif_theme* active = cuif_get_theme();
+    assert(colorsEqual(active->primary, cuif_rgb(1.0f, 0.0f, 0.0f)));
+    assert(!colorsEqual(active->primary, CUIF_THEME_DEFAULT.primary));
+
+    /* Restore so later tests in this suite see the default again. */
+    cuif_set_theme(&CUIF_THEME_DEFAULT);
+    printf("  cuif_set_theme() changes what cuif_get_theme() returns. Pass.\n");
+}
+
+static void testSetThemeNullFallsBackToDefault(void) {
+    printf("Running testSetThemeNullFallsBackToDefault...\n");
+
+    cuif_theme custom = CUIF_THEME_DEFAULT;
+    custom.primary = cuif_rgb(0.0f, 1.0f, 0.0f);
+    cuif_set_theme(&custom);
+    assert(colorsEqual(cuif_get_theme()->primary, cuif_rgb(0.0f, 1.0f, 0.0f)));
+
+    cuif_set_theme(NULL);
+    assert(colorsEqual(cuif_get_theme()->primary, CUIF_THEME_DEFAULT.primary));
+
+    printf("  cuif_set_theme(NULL) falls back to CUIF_THEME_DEFAULT. Pass.\n");
+}
+
 int main(void) {
     printf("==============================\n");
     printf("Starting cuif Framework Tests\n");
@@ -121,6 +170,10 @@ int main(void) {
     testTabbarCreateDefaults();
     testTabbarClickSelectsCorrectTab();
     testTabbarClickingSelectedTabDoesNotRefire();
+
+    testDefaultThemeIsActiveInitially();
+    testSetThemeChangesActiveTheme();
+    testSetThemeNullFallsBackToDefault();
 
     tearDownTestWindow();
 
