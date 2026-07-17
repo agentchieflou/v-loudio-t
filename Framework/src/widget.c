@@ -1,6 +1,7 @@
 #include "cuif/widget.h"
 #include "cuif/graphics.h"
 #include "cuif/theme.h"
+#include "cuif/tessellation.h"
 #include <windows.h>
 #include <gl/gl.h>
 #include <stdlib.h>
@@ -159,7 +160,8 @@ static void draw_arc(float cx, float cy, float r, float start_angle, float end_a
     glColor4f(color.r, color.g, color.b, color.a);
     glLineWidth(thickness);
     glBegin(GL_LINE_STRIP);
-    int segments = 32;
+    float dpi_scale = cuif_current_window ? cuif_window_get_dpi_scale(cuif_current_window) : 1.0f;
+    int segments = cuif_arc_segment_count(r * dpi_scale, fabsf(end_angle - start_angle));
     for (int i = 0; i <= segments; ++i) {
         float theta = start_angle + (end_angle - start_angle) * ((float)i / segments);
         glVertex2f(cx + r * cosf(theta), cy + r * sinf(theta));

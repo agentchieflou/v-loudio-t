@@ -1,4 +1,6 @@
 #include "cuif/graphics.h"
+#include "cuif/tessellation.h"
+#include "cuif/window.h"
 
 #include <windows.h>
 #include <gl/gl.h>
@@ -59,7 +61,8 @@ void cuif_draw_rounded_rect(float x, float y, float w, float h, float radius, cu
         glBegin(GL_LINE_LOOP);
     }
 
-    int segs = 8;
+    float dpi_scale = cuif_current_window ? cuif_window_get_dpi_scale(cuif_current_window) : 1.0f;
+    int segs = cuif_arc_segment_count(radius * dpi_scale, 0.5f * (float)M_PI);
     /* Top-Right corner: angles 270 deg to 360 deg */
     emit_arc(x + w - radius, y + radius, radius, 1.5f * (float)M_PI, 2.0f * (float)M_PI, segs);
     /* Bottom-Right corner: angles 0 deg to 90 deg */
