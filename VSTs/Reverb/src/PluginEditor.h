@@ -28,6 +28,17 @@ public:
 
 private:
     void ensureCuifWindowCreated();
+    void updateDpiScale();
+
+    /*
+     * DPI-scale change detection, debounced so a live monitor-drag
+     * transition doesn't thrash the native window resize (and, once #83
+     * lands, an expensive font atlas re-bake) every single frame.
+     */
+    float currentDpiScale = 1.0f;
+    float pendingDpiScale = 1.0f;
+    int pendingDpiScaleStableTicks = 0;
+    static constexpr int kDpiScaleDebounceTicks = 15; // ~250ms at the editor's 60Hz timer
 
     cuif_window* myWindow = nullptr;
     cuif_widget* rootContainer = nullptr;

@@ -184,11 +184,18 @@ void LoudioReverbEditor::ensureCuifWindowCreated() {
     void* parentHandle = getWindowHandle();
     if (parentHandle == nullptr) return;
 
+    float initialScale = (float)juce::Component::getApproximateScaleFactorForComponent(this);
+    if (initialScale <= 0.0f) initialScale = 1.0f;
+    currentDpiScale = initialScale;
+    pendingDpiScale = initialScale;
+    pendingDpiScaleStableTicks = 0;
+
     cuif_window_desc desc = { 0 };
     desc.title = "Reverb Panel";
     desc.width = getWidth();
     desc.height = getHeight();
     desc.parent_native_handle = parentHandle;
+    desc.dpi_scale = currentDpiScale;
 
     myWindow = cuif_window_create(&desc);
     if (myWindow == nullptr) return;
@@ -302,26 +309,50 @@ void LoudioReverbEditor::ensureCuifWindowCreated() {
 
     cuif_window_set_root_widget(myWindow, rootContainer);
     syncUIFromProcessor();
-
-    HWND childHwnd = (HWND)cuif_window_native_handle(myWindow);
-    if (childHwnd != NULL) {
-        MoveWindow(childHwnd, 0, 0, getWidth(), getHeight(), TRUE);
-    }
 }
 
 void LoudioReverbEditor::resized() {
     ensureCuifWindowCreated();
 
     if (myWindow != nullptr) {
-        HWND childHwnd = (HWND)cuif_window_native_handle(myWindow);
-        if (childHwnd != NULL) {
-            MoveWindow(childHwnd, 0, 0, getWidth(), getHeight(), TRUE);
-        }
+        cuif_window_resize(myWindow, getWidth(), getHeight());
+    }
+}
+
+/*
+ * Polls JUCE's own resolved DPI/host scale factor (not GetDpiForWindow --
+ * that would only see the OS per-monitor DPI and miss host-imposed
+ * AffineTransform scaling in a non-per-monitor-aware VST3 host) and pushes
+ * it into cuif once a change has been stable for kDpiScaleDebounceTicks
+ * ticks, so a live monitor-drag transition doesn't thrash the native window
+ * resize (and, once the font atlas re-bakes on scale change, an expensive
+ * re-bake) every single frame.
+ */
+void LoudioReverbEditor::updateDpiScale() {
+    if (myWindow == nullptr) return;
+
+    float scale = (float)juce::Component::getApproximateScaleFactorForComponent(this);
+    if (scale <= 0.0f) scale = 1.0f;
+
+    if (std::abs(scale - pendingDpiScale) > 0.001f) {
+        pendingDpiScale = scale;
+        pendingDpiScaleStableTicks = 0;
+        return;
+    }
+
+    if (pendingDpiScaleStableTicks < kDpiScaleDebounceTicks) {
+        ++pendingDpiScaleStableTicks;
+    }
+
+    if (pendingDpiScaleStableTicks == kDpiScaleDebounceTicks && std::abs(pendingDpiScale - currentDpiScale) > 0.001f) {
+        currentDpiScale = pendingDpiScale;
+        cuif_window_set_dpi_scale(myWindow, currentDpiScale);
     }
 }
 
 void LoudioReverbEditor::timerCallback() {
     ensureCuifWindowCreated();
+    updateDpiScale();
 
     if (myWindow != nullptr) {
         pollSpectrumData();

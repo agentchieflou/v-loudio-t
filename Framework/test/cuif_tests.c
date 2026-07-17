@@ -3,6 +3,7 @@
 #include "cuif/theme.h"
 #include "cuif/theme_hello_kitty.h"
 #include "cuif/theme_greens.h"
+#include "cuif/cuif_dpi_utils.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -251,6 +252,52 @@ static void testGreensThemeAppliesViaSetTheme(void) {
     printf("  cuif_set_theme(&CUIF_THEME_GREENS) is reflected by cuif_get_theme(). Pass.\n");
 }
 
+static void testDpiScaleIdentityAtScale1(void) {
+    printf("Running testDpiScaleIdentityAtScale1...\n");
+
+    assert(cuif_logical_to_physical_px(800, 1.0f) == 800);
+    assert(cuif_logical_to_physical_px(0, 1.0f) == 0);
+    assert(fabsf(cuif_physical_to_logical_px(800.0f, 1.0f) - 800.0f) < 1e-5f);
+
+    printf("  scale=1.0 is an identity transform in both directions. Pass.\n");
+}
+
+static void testDpiScaleExactRoundingAtCommonScales(void) {
+    printf("Running testDpiScaleExactRoundingAtCommonScales...\n");
+
+    /* 1.5x (150% DPI, common on 1440p) */
+    assert(cuif_logical_to_physical_px(800, 1.5f) == 1200);
+    assert(cuif_logical_to_physical_px(801, 1.5f) == 1202); /* 1201.5 rounds to 1202 */
+
+    /* 2.0x (200% DPI, typical 4K) */
+    assert(cuif_logical_to_physical_px(800, 2.0f) == 1600);
+    assert(cuif_logical_to_physical_px(600, 2.0f) == 1200);
+
+    printf("  Common DPI scales (1.5x, 2.0x) produce exact expected physical pixel sizes. Pass.\n");
+}
+
+static void testDpiScaleRoundTripWithinOnePixel(void) {
+    printf("Running testDpiScaleRoundTripWithinOnePixel...\n");
+
+    const float scales[] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f };
+    const int logicalSizes[] = { 1, 17, 70, 110, 800, 599 };
+
+    for (size_t s = 0; s < sizeof(scales) / sizeof(scales[0]); ++s) {
+        for (size_t i = 0; i < sizeof(logicalSizes) / sizeof(logicalSizes[0]); ++i) {
+            int physical = cuif_logical_to_physical_px(logicalSizes[i], scales[s]);
+            float roundTripped = cuif_physical_to_logical_px((float)physical, scales[s]);
+            float diff = fabsf(roundTripped - (float)logicalSizes[i]);
+            if (diff >= 1.0f) {
+                printf("  FAIL: logical=%d scale=%.2f -> physical=%d -> roundtrip=%.3f (diff=%.3f)\n",
+                       logicalSizes[i], scales[s], physical, roundTripped, diff);
+            }
+            assert(diff < 1.0f);
+        }
+    }
+
+    printf("  logical->physical->logical round-trips within 1px across common scales and sizes. Pass.\n");
+}
+
 int main(void) {
     printf("==============================\n");
     printf("Starting cuif Framework Tests\n");
@@ -274,6 +321,10 @@ int main(void) {
     testGreensThemeIsDistinctFromDefaultAndHelloKitty();
     testGreensThemeIsReadable();
     testGreensThemeAppliesViaSetTheme();
+
+    testDpiScaleIdentityAtScale1();
+    testDpiScaleExactRoundingAtCommonScales();
+    testDpiScaleRoundTripWithinOnePixel();
 
     tearDownTestWindow();
 
