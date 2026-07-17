@@ -4,11 +4,16 @@
 #include "cuif/theme_hello_kitty.h"
 #include "cuif/theme_greens.h"
 #include "cuif/cuif_dpi_utils.h"
+#include "cuif/tessellation.h"
 
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 static bool colorsEqual(cuif_color a, cuif_color b) {
     const float eps = 1e-6f;
@@ -298,6 +303,63 @@ static void testDpiScaleRoundTripWithinOnePixel(void) {
     printf("  logical->physical->logical round-trips within 1px across common scales and sizes. Pass.\n");
 }
 
+static void testArcSegmentCountIsMonotonicWithRadius(void) {
+    printf("Running testArcSegmentCountIsMonotonicWithRadius...\n");
+
+    const float radii[] = { 2.0f, 5.0f, 10.0f, 22.0f, 35.0f, 60.0f, 100.0f, 300.0f };
+    int prev = cuif_arc_segment_count(radii[0], (float)(1.5 * M_PI));
+    for (size_t i = 1; i < sizeof(radii) / sizeof(radii[0]); ++i) {
+        int cur = cuif_arc_segment_count(radii[i], (float)(1.5 * M_PI));
+        assert(cur >= prev);
+        prev = cur;
+    }
+
+    printf("  Segment count never decreases as radius grows. Pass.\n");
+}
+
+static void testArcSegmentCountClampsAtFloorAndCeiling(void) {
+    printf("Running testArcSegmentCountClampsAtFloorAndCeiling...\n");
+
+    /* Tiny/degenerate radius clamps to the floor, not zero or negative. */
+    assert(cuif_arc_segment_count(0.01f, (float)(2.0 * M_PI)) == 8);
+    assert(cuif_arc_segment_count(0.0f, (float)(2.0 * M_PI)) == 8);
+    assert(cuif_arc_segment_count(-5.0f, (float)(2.0 * M_PI)) == 8);
+
+    /* Huge radius clamps to the ceiling, doesn't blow up the vertex count unboundedly. */
+    assert(cuif_arc_segment_count(5000.0f, (float)(2.0 * M_PI)) == 128);
+
+    printf("  Segment count clamps correctly at both the small-radius floor and large-radius ceiling. Pass.\n");
+}
+
+static void testArcSegmentCountScalesWithDevicePixelDensity(void) {
+    printf("Running testArcSegmentCountScalesWithDevicePixelDensity...\n");
+
+    /* A knob's ~22px logical radius (70x70 secondary knobs, r = w*0.32) over its ~270-degree
+       (1.5*pi) sweep, at logical (1x) vs. a 2x-DPI device-pixel radius -- this is the actual
+       regression this issue exists to fix: the old fixed segment count (32) did not change at
+       all as pixel density increased, which made faceting *more* visible on high-DPI displays,
+       not less. */
+    float logical_radius = 22.4f;
+    float sweep = (float)(1.5 * M_PI);
+
+    int segments_at_1x = cuif_arc_segment_count(logical_radius * 1.0f, sweep);
+    int segments_at_2x = cuif_arc_segment_count(logical_radius * 2.0f, sweep);
+
+    assert(segments_at_2x > segments_at_1x);
+    /*
+     * Old hardcoded value was 32 regardless of scale. Both the unscaled
+     * (1x) and scaled (2x) cases must exceed it -- if only the 2x case
+     * did, this issue would ship a *regression* at today's normal 1x
+     * scale (the exact resolution the original faceted-knobs complaint
+     * was reported at) in exchange for improving a scale nobody's on yet.
+     */
+    assert(segments_at_1x > 32);
+    assert(segments_at_2x > 32);
+
+    printf("  Segment count at 2x DPI scale (%d) is meaningfully higher than the old fixed 32 (1x: %d). Pass.\n",
+           segments_at_2x, segments_at_1x);
+}
+
 int main(void) {
     printf("==============================\n");
     printf("Starting cuif Framework Tests\n");
@@ -325,6 +387,10 @@ int main(void) {
     testDpiScaleIdentityAtScale1();
     testDpiScaleExactRoundingAtCommonScales();
     testDpiScaleRoundTripWithinOnePixel();
+
+    testArcSegmentCountIsMonotonicWithRadius();
+    testArcSegmentCountClampsAtFloorAndCeiling();
+    testArcSegmentCountScalesWithDevicePixelDensity();
 
     tearDownTestWindow();
 
