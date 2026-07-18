@@ -24,6 +24,7 @@ juce_generate_juce_header(LoudioReverb)
 target_sources(LoudioReverb PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
+    src/ReverbCore.cpp
     ../../Framework/src/graphics.c
     ../../Framework/src/font.c
     ../../Framework/src/widget.c
@@ -66,6 +67,7 @@ option(LOUDIO_REVERB_BUILD_TESTS "Build DSP unit tests executable" ON)
 if(LOUDIO_REVERB_BUILD_TESTS)
     add_executable(dsp_tests
         src/DSPTests.cpp
+        src/ReverbCore.cpp
         ../../Framework/src/theme.c
         ../../Framework/src/theme_hello_kitty.c
         ../../Framework/src/theme_greens.c

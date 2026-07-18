@@ -1,7 +1,9 @@
 #pragma once
-#include <JuceHeader.h>
+#include "SimpleFFT.h"
 #include <vector>
 #include <cmath>
+#include <memory>
+#include <algorithm>
 
 class FFTAnalyzer {
 public:
@@ -11,7 +13,7 @@ public:
     void prepare(double sampleRate) {
         (void)sampleRate;
         /* Use 1024 points (10th order FFT) */
-        fft = std::make_unique<juce::dsp::FFT>(10);
+        fft = std::make_unique<SimpleFFT>(10);
         fftSize = fft->getSize();
 
         fifo.assign(fftSize, 0.0f);
@@ -74,7 +76,7 @@ public:
     }
 
 private:
-    std::unique_ptr<juce::dsp::FFT> fft;
+    std::unique_ptr<SimpleFFT> fft;
     int fftSize = 0;
     std::vector<float> fifo;
     std::vector<float> fftData;
