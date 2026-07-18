@@ -1,15 +1,31 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "DelayLine.h"
-#include "AllPassDiffuser.h"
-#include "EarlyReflections.h"
-#include "OnePoleLPF.h"
-#include "Crossover.h"
-#include "EnvelopeDetector.h"
-#include "FFTAnalyzer.h"
+#include "ReverbCore.h"
 #include "cuif/ring_buffer.h"
 #include "SharedStructures.h"
+
+/*
+ * Thin JUCE/VST3-facing wrapper (#100/B3) around ReverbCore, the actual
+ * JUCE-free DSP engine. This class's job is exactly two bridges:
+ *
+ *   1. APVTS <-> ReverbCore parameter sync, each block: drain UI-driven
+ *      ring-buffer messages into APVTS (unchanged from before extraction,
+ *      keeps the host's own automation-lane/generic-UI view of every
+ *      parameter correct), then push every current APVTS value into
+ *      ReverbCore via setParameterValueDirect() (same-thread, no queue --
+ *      see ReverbCore.h's header comment for why this is safe).
+ *   2. ReverbCore's analyzer-magnitude output -> dspToUiRingBuffer, exactly
+ *      like before extraction, so PluginEditor.cpp's reading side is
+ *      completely unchanged.
+ *
+ * getStateInformation/setStateInformation still serialize APVTS's own XML
+ * state exactly as before -- this preserves existing .vstpreset/DAW-session
+ * compatibility. ReverbCore has its own separate, JUCE-free getState/
+ * setState (a small binary blob) for a future host-agnostic (LPI) wrapper
+ * with no APVTS-equivalent preset mechanism at all; this class doesn't use
+ * it.
+ */
 class LoudioReverbProcessor : public juce::AudioProcessor {
 public:
     LoudioReverbProcessor();
@@ -40,52 +56,18 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     juce::AudioProcessorValueTreeState apvts;
 
-    /* Shared SPSC lock-free ring buffers for DSP <-> UI communications */
+    /* Shared SPSC lock-free ring buffers for DSP <-> UI communications --
+     * unchanged in shape and ownership from before extraction; only the
+     * DSP math that fills/drains them moved into ReverbCore. */
     cuif_spsc_ring_buffer dspToUiRingBuffer;
     cuif_spsc_ring_buffer uiToDspRingBuffer;
 
 private:
-    double currentSampleRate = 44100.0;
-
-    DelayLine preDelayLeft;
-    DelayLine preDelayRight;
-
-    AllPassDiffuser diffuserLeft;
-    AllPassDiffuser diffuserRight;
-
-    EarlyReflections earlyReflectionsLeft;
-    EarlyReflections earlyReflectionsRight;
-
-    DelayLine fdnDelayLines[8];
-    ThreeBandCrossover crossovers[8];
-    OnePoleLPF fdnDampingFilters[8];
-
-    using PostEQChain = juce::dsp::ProcessorChain<juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Filter<float>, juce::dsp::IIR::Filter<float>>;
-    PostEQChain postEqLeft;
-    PostEQChain postEqRight;
-
-    EnvelopeDetector duckDetector;
-    EnvelopeDetector gateDetector;
-    
-    float gateFade = 1.0f;
-    float gateTimerMs = 0.0f;
-
-    void updatePostEQ();
-
-    FFTAnalyzer fftAnalyzerLeft;
-    FFTAnalyzer fftAnalyzerRight;
+    ReverbCore core;
 
     /* Pre-allocated storage for ring buffers (1024 bytes is ample for FIFO data) */
     unsigned char dspToUiStorage[1024];
     unsigned char uiToDspStorage[1024];
-
-    juce::LinearSmoothedValue<float> smoothedPreDelayMs;
-    juce::LinearSmoothedValue<float> smoothedDecayTimeSec;
-    juce::LinearSmoothedValue<float> smoothedDamping;
-    juce::LinearSmoothedValue<float> smoothedWidth;
-    juce::LinearSmoothedValue<float> smoothedDryWet;
-    juce::LinearSmoothedValue<float> smoothedDistance;
-    juce::LinearSmoothedValue<float> smoothedThickness;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LoudioReverbProcessor)
 };
