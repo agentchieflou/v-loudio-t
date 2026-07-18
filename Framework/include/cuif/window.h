@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,6 +39,66 @@ typedef struct {
 typedef void (*cuif_render_fn)(cuif_window* window, void* user_data);
 
 cuif_window* cuif_window_create(const cuif_window_desc* desc);
+
+/*
+ * Creates a window that never has a visible on-screen surface: a hidden
+ * HWND backs its GL context (reusing the same bootstrap trick as the
+ * process-wide root GL context, see window_win32.c), but rendering targets
+ * an off-screen FBO instead of that HWND's own framebuffer -- cuif_window_
+ * render_frame() renders into it exactly as normal, and cuif_window_
+ * read_pixels() reads the result back instead of a real window ever
+ * presenting anything via SwapBuffers.
+ *
+ * Intended for hosts with no native window surface of their own to embed
+ * into (e.g. noprod's browser-based UI, which streams rendered frames over
+ * a network connection rather than embedding a native child window the way
+ * the VST3 host-embedding path does) -- see Plugins/Reverb/
+ * ARCHITECTURE_DECISIONS.md and Epic B (LPI) for the fuller rationale.
+ *
+ * All widget/input/layout code is completely unaware of this distinction --
+ * cuif_window_set_root_widget/cuif_window_inject_mouse_*() work identically
+ * on an offscreen window as a real one. MSAA is not requested for offscreen
+ * windows in this version (FBO multisample-resolve is unimplemented -- see
+ * the comment above cuif_init_gl_context's MSAA branch in window_win32.c).
+ *
+ * logical_width/logical_height and dpi_scale follow the exact same
+ * contract as cuif_window_desc's fields.
+ */
+cuif_window* cuif_window_create_offscreen(int logical_width, int logical_height, float dpi_scale);
+
+/* True if this window was created via cuif_window_create_offscreen(). */
+bool cuif_window_is_offscreen(cuif_window* window);
+
+/*
+ * Reads back the most recently rendered frame of an offscreen window as
+ * tightly-packed RGBA8 (4 bytes/pixel, no padding, row-major, top-left
+ * origin), physical_width * physical_height * 4 bytes. Returns false (and
+ * leaves out_rgba untouched) if window is NULL, not offscreen, or
+ * out_buffer_size is too small -- callers should size their buffer from
+ * cuif_window_get_dpi_scale()-derived physical dimensions (or just call
+ * once with a generously large buffer computed the same way
+ * cuif_window_create_offscreen sized the FBO). No-op on a normal on-screen
+ * window; use cuif_window_render_frame() + SwapBuffers (already automatic)
+ * for that case instead.
+ */
+bool cuif_window_read_pixels(cuif_window* window, unsigned char* out_rgba, size_t out_buffer_size);
+
+/*
+ * Synthetic input injection -- calls the exact same cuif_widget_dispatch_
+ * mouse_*() functions cuif_wnd_proc() calls for real WM_LBUTTONDOWN/UP/
+ * WM_MOUSEMOVE messages, just without an actual Win32 message ever being
+ * sent. Coordinates are LOGICAL pixels (matching cuif_widget_dispatch_
+ * mouse_*()'s own contract -- these are thin wrappers, not a parallel
+ * coordinate space). button follows the same convention as the real
+ * WM_MOUSEMOVE handler: 0 while a button is held (dragging), -1 while none
+ * is. Works on both offscreen and regular windows (a regular window's real
+ * WndProc-driven input keeps working unaffected either way -- this is an
+ * additional input path, not a replacement).
+ */
+void cuif_window_inject_mouse_down(cuif_window* window, float logical_x, float logical_y, int button);
+void cuif_window_inject_mouse_up(cuif_window* window, float logical_x, float logical_y, int button);
+void cuif_window_inject_mouse_move(cuif_window* window, float logical_x, float logical_y, int button);
+
 void cuif_window_destroy(cuif_window* window);
 
 /* Pumps pending OS messages for this window. Returns false once the window has been closed. */

@@ -33,4 +33,10 @@ option(CUIF_BUILD_TESTS "Build the cuif unit test executable" ON)
 if(CUIF_BUILD_TESTS)
     add_executable(cuif_tests test/cuif_tests.c)
     target_link_libraries(cuif_tests PRIVATE cuif)
+
+    # Console app (not WIN32) -- unlike cuif_harness, this renders offscreen
+    # and dumps frames to disk, so it has no need of (and shouldn't hide
+    # behind) a GUI subsystem exe.
+    add_executable(cuif_offscreen_harness test/offscreen_harness.c)
+    target_link_libraries(cuif_offscreen_harness PRIVATE cuif)
 endif()
