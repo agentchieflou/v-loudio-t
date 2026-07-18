@@ -33,6 +33,11 @@ struct cuif_window {
     struct cuif_widget* active_widget;
     struct cuif_widget* hovered_widget;
     struct cuif_widget* open_dropdown;
+
+    /* Offscreen rendering (#99/B2) -- see cuif_window_create_offscreen(). */
+    bool offscreen;
+    GLuint offscreen_fbo;
+    GLuint offscreen_color_tex;
 };
 
 cuif_window* cuif_current_window = NULL;
@@ -161,6 +166,44 @@ static bool cuif_register_class_once(HINSTANCE hinstance) {
 #define GL_MULTISAMPLE 0x809D /* not in the GL 1.1-era gl/gl.h Windows ships */
 #endif
 
+/*
+ * Framebuffer objects (#99/B2, offscreen rendering) -- GL 3.0 core /
+ * ARB_framebuffer_object, same story as GL_MULTISAMPLE above: not in the
+ * GL 1.1-era gl/gl.h Windows ships, not statically linkable via
+ * opengl32.lib. Resolved once per process via wglGetProcAddress, same
+ * pattern as the MSAA/glGenerateMipmap resolution elsewhere in this
+ * codebase.
+ */
+#ifndef GL_FRAMEBUFFER
+#define GL_FRAMEBUFFER 0x8D40
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_RGBA8 0x8058
+#endif
+
+typedef void (WINAPI* PFNCUIFGLGENFRAMEBUFFERSPROC)(GLsizei n, GLuint* framebuffers);
+typedef void (WINAPI* PFNCUIFGLBINDFRAMEBUFFERPROC)(GLenum target, GLuint framebuffer);
+typedef void (WINAPI* PFNCUIFGLFRAMEBUFFERTEXTURE2DPROC)(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+typedef GLenum (WINAPI* PFNCUIFGLCHECKFRAMEBUFFERSTATUSPROC)(GLenum target);
+typedef void (WINAPI* PFNCUIFGLDELETEFRAMEBUFFERSPROC)(GLsizei n, const GLuint* framebuffers);
+
+static bool cuif_fbo_ext_probed = false;
+static PFNCUIFGLGENFRAMEBUFFERSPROC cuif_glGenFramebuffers = NULL;
+static PFNCUIFGLBINDFRAMEBUFFERPROC cuif_glBindFramebuffer = NULL;
+static PFNCUIFGLFRAMEBUFFERTEXTURE2DPROC cuif_glFramebufferTexture2D = NULL;
+static PFNCUIFGLCHECKFRAMEBUFFERSTATUSPROC cuif_glCheckFramebufferStatus = NULL;
+static PFNCUIFGLDELETEFRAMEBUFFERSPROC cuif_glDeleteFramebuffers = NULL;
+
+static void cuif_resolve_fbo_extensions_once(void) {
+    if (cuif_fbo_ext_probed) return;
+    cuif_fbo_ext_probed = true;
+    cuif_glGenFramebuffers = (PFNCUIFGLGENFRAMEBUFFERSPROC)wglGetProcAddress("glGenFramebuffers");
+    cuif_glBindFramebuffer = (PFNCUIFGLBINDFRAMEBUFFERPROC)wglGetProcAddress("glBindFramebuffer");
+    cuif_glFramebufferTexture2D = (PFNCUIFGLFRAMEBUFFERTEXTURE2DPROC)wglGetProcAddress("glFramebufferTexture2D");
+    cuif_glCheckFramebufferStatus = (PFNCUIFGLCHECKFRAMEBUFFERSTATUSPROC)wglGetProcAddress("glCheckFramebufferStatus");
+    cuif_glDeleteFramebuffers = (PFNCUIFGLDELETEFRAMEBUFFERSPROC)wglGetProcAddress("glDeleteFramebuffers");
+}
+
 typedef BOOL(WINAPI* PFNCUIFWGLCHOOSEPIXELFORMATARBPROC)(HDC hdc, const int* piAttribIList, const FLOAT* pfAttribFList, UINT nMaxFormats, int* piFormats, UINT* nNumFormats);
 
 #define CUIF_MSAA_SAMPLES 4
@@ -251,7 +294,7 @@ static void cuif_ensure_gl_root_context(void) {
     }
 }
 
-static bool cuif_init_gl_context(cuif_window* window) {
+static bool cuif_init_gl_context(cuif_window* window, bool request_msaa) {
     cuif_ensure_gl_root_context();
 
     PIXELFORMATDESCRIPTOR pfd = {0};
@@ -270,7 +313,15 @@ static bool cuif_init_gl_context(cuif_window* window) {
 
     int pixel_format = 0;
 
-    if (cuif_wglChoosePixelFormatARB) {
+    /*
+     * Offscreen windows (#99/B2) don't request MSAA: resolving a
+     * multisampled render target into the FBO's plain color texture needs
+     * an explicit glBlitFramebuffer resolve step this version doesn't
+     * implement (see cuif_window_create_offscreen()'s header comment) --
+     * cuif's adaptive tessellation (#81) already reduces aliasing enough
+     * that this is a reasonable v1 scope cut, not an oversight.
+     */
+    if (request_msaa && cuif_wglChoosePixelFormatARB) {
         int attribs[] = {
             WGL_DRAW_TO_WINDOW_ARB, TRUE,
             WGL_SUPPORT_OPENGL_ARB, TRUE,
@@ -394,7 +445,7 @@ cuif_window* cuif_window_create(const cuif_window_desc* desc) {
     SetWindowLongPtrW(window->hwnd, GWLP_USERDATA, (LONG_PTR)window);
     window->hdc = GetDC(window->hwnd);
 
-    if (!cuif_init_gl_context(window)) {
+    if (!cuif_init_gl_context(window, /* request_msaa */ true)) {
         DestroyWindow(window->hwnd);
         free(window);
         return NULL;
@@ -418,10 +469,131 @@ cuif_window* cuif_window_create(const cuif_window_desc* desc) {
     return window;
 }
 
+cuif_window* cuif_window_create_offscreen(int logical_width, int logical_height, float dpi_scale) {
+    cuif_window* window = (cuif_window*)calloc(1, sizeof(cuif_window));
+    if (!window) return NULL;
+
+    HMODULE hinstance = NULL;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)cuif_window_create, &hinstance);
+
+    CUIF_LOG("cuif_window_create_offscreen: starting on hinstance = %p", hinstance);
+
+    if (!cuif_register_class_once(hinstance)) {
+        free(window);
+        return NULL;
+    }
+
+    logical_width = logical_width > 0 ? logical_width : 800;
+    logical_height = logical_height > 0 ? logical_height : 600;
+    dpi_scale = dpi_scale > 0.0f ? dpi_scale : 1.0f;
+    int physical_width = cuif_logical_to_physical_px(logical_width, dpi_scale);
+    int physical_height = cuif_logical_to_physical_px(logical_height, dpi_scale);
+
+    window->dpi_scale = dpi_scale;
+    window->logical_w = logical_width;
+    window->logical_h = logical_height;
+    window->offscreen = true;
+
+    /*
+     * WS_POPUP, never WS_VISIBLE -- same "backing HWND that's never shown"
+     * approach cuif_ensure_gl_root_context()'s dummy window already uses to
+     * bootstrap a GL context with no visible surface. No parent: unlike the
+     * on-screen embedding path, an offscreen window has no host window to
+     * embed into.
+     */
+    window->hwnd = CreateWindowExW(
+        0, CUIF_WNDCLASS_NAME, L"cuif (offscreen)", WS_POPUP,
+        0, 0, physical_width, physical_height,
+        NULL, NULL, hinstance, NULL);
+
+    if (!window->hwnd) {
+        CUIF_LOG("cuif_window_create_offscreen: CreateWindowExW failed: error %lu", GetLastError());
+        free(window);
+        return NULL;
+    }
+
+    SetWindowLongPtrW(window->hwnd, GWLP_USERDATA, (LONG_PTR)window);
+    window->hdc = GetDC(window->hwnd);
+
+    if (!cuif_init_gl_context(window, /* request_msaa */ false)) {
+        DestroyWindow(window->hwnd);
+        free(window);
+        return NULL;
+    }
+
+    if (!wglMakeCurrent(window->hdc, window->glrc)) {
+        CUIF_LOG("cuif_window_create_offscreen: wglMakeCurrent failed: error %lu", GetLastError());
+        wglDeleteContext(window->glrc);
+        DestroyWindow(window->hwnd);
+        free(window);
+        return NULL;
+    }
+
+    cuif_resolve_fbo_extensions_once();
+    if (!cuif_glGenFramebuffers || !cuif_glBindFramebuffer || !cuif_glFramebufferTexture2D ||
+        !cuif_glCheckFramebufferStatus || !cuif_glDeleteFramebuffers) {
+        CUIF_LOG("cuif_window_create_offscreen: framebuffer object extension not available on this driver");
+        wglMakeCurrent(NULL, NULL);
+        wglDeleteContext(window->glrc);
+        DestroyWindow(window->hwnd);
+        free(window);
+        return NULL;
+    }
+
+    /* Off-screen render target: a plain (non-multisampled -- see
+     * cuif_init_gl_context()'s request_msaa comment) RGBA8 color texture
+     * attached to an FBO, sized to the same physical dimensions an
+     * on-screen window's real framebuffer would be. */
+    cuif_glGenFramebuffers(1, &window->offscreen_fbo);
+    cuif_glBindFramebuffer(GL_FRAMEBUFFER, window->offscreen_fbo);
+
+    glGenTextures(1, &window->offscreen_color_tex);
+    glBindTexture(GL_TEXTURE_2D, window->offscreen_color_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, physical_width, physical_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    cuif_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, window->offscreen_color_tex, 0);
+
+    GLenum fbo_status = cuif_glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    cuif_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    if (fbo_status != GL_FRAMEBUFFER_COMPLETE) {
+        CUIF_LOG("cuif_window_create_offscreen: FBO incomplete, status = 0x%x", fbo_status);
+        glDeleteTextures(1, &window->offscreen_color_tex);
+        cuif_glDeleteFramebuffers(1, &window->offscreen_fbo);
+        wglMakeCurrent(NULL, NULL);
+        wglDeleteContext(window->glrc);
+        DestroyWindow(window->hwnd);
+        free(window);
+        return NULL;
+    }
+
+    cuif_window_count++;
+    CUIF_LOG("cuif_window_create_offscreen: succeeded, %dx%d physical. Active windows count: %d",
+              physical_width, physical_height, cuif_window_count);
+
+    return window;
+}
+
+bool cuif_window_is_offscreen(cuif_window* window) {
+    return window ? window->offscreen : false;
+}
+
 void cuif_window_destroy(cuif_window* window) {
     if (!window) return;
 
     CUIF_LOG("cuif_window_destroy starting for HWND = %p", window->hwnd);
+
+    if (window->offscreen && window->glrc) {
+        /* Deleting these needs a current context in the share group --
+         * make this window's own context current first, since nothing
+         * guarantees it already is by the time destroy() is called. */
+        wglMakeCurrent(window->hdc, window->glrc);
+        if (window->offscreen_color_tex) glDeleteTextures(1, &window->offscreen_color_tex);
+        if (window->offscreen_fbo && cuif_glDeleteFramebuffers) cuif_glDeleteFramebuffers(1, &window->offscreen_fbo);
+    }
 
     if (window->glrc) {
         wglMakeCurrent(NULL, NULL);
@@ -536,6 +708,14 @@ void cuif_window_render_frame(cuif_window* window) {
         return;
     }
 
+    /* Offscreen windows render into their own FBO instead of the (never
+     * presented) default framebuffer -- everything below this is otherwise
+     * identical between the two paths, since widget/graphics code never
+     * touches window->hwnd/hdc directly. */
+    if (window->offscreen && cuif_glBindFramebuffer) {
+        cuif_glBindFramebuffer(GL_FRAMEBUFFER, window->offscreen_fbo);
+    }
+
     RECT rect;
     GetClientRect(window->hwnd, &rect);
     int physical_width = rect.right - rect.left;
@@ -588,7 +768,15 @@ void cuif_window_render_frame(cuif_window* window) {
         cuif_widget_render(window->root_widget);
     }
 
-    SwapBuffers(window->hdc);
+    if (window->offscreen) {
+        /* Nothing to present -- glFlush() (not glFinish(), no need to
+         * stall) makes sure the render is actually submitted before a
+         * caller turns around and calls cuif_window_read_pixels(). */
+        glFlush();
+        if (cuif_glBindFramebuffer) cuif_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    } else {
+        SwapBuffers(window->hdc);
+    }
 }
 
 void* cuif_window_native_handle(cuif_window* window) {
@@ -650,4 +838,62 @@ struct cuif_widget* cuif_window_get_open_dropdown(cuif_window* w) {
 
 void cuif_window_set_open_dropdown(cuif_window* w, struct cuif_widget* widget) {
     if (w) w->open_dropdown = widget;
+}
+
+bool cuif_window_read_pixels(cuif_window* window, unsigned char* out_rgba, size_t out_buffer_size) {
+    if (!window || !window->offscreen || !out_rgba) return false;
+    if (!cuif_glBindFramebuffer) return false;
+
+    RECT rect;
+    GetClientRect(window->hwnd, &rect);
+    int physical_width = rect.right - rect.left;
+    int physical_height = rect.bottom - rect.top;
+    size_t required = (size_t)physical_width * (size_t)physical_height * 4;
+    if (out_buffer_size < required) return false;
+
+    if (!wglMakeCurrent(window->hdc, window->glrc)) {
+        CUIF_LOG("cuif_window_read_pixels: wglMakeCurrent failed: error %lu", GetLastError());
+        return false;
+    }
+
+    cuif_glBindFramebuffer(GL_FRAMEBUFFER, window->offscreen_fbo);
+    /* Tightly packed rows -- matches the tightly-packed RGBA8 layout
+     * cuif_window_create_offscreen() allocated the texture with. */
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, physical_width, physical_height, GL_RGBA, GL_UNSIGNED_BYTE, out_rgba);
+    cuif_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    return true;
+}
+
+void cuif_window_inject_mouse_down(cuif_window* window, float logical_x, float logical_y, int button) {
+    if (!window) return;
+    cuif_current_window = window;
+    window->last_mx = logical_x;
+    window->last_my = logical_y;
+    if (window->root_widget) {
+        cuif_widget_dispatch_mouse_down(window->root_widget, logical_x, logical_y, button);
+    }
+}
+
+void cuif_window_inject_mouse_up(cuif_window* window, float logical_x, float logical_y, int button) {
+    if (!window) return;
+    cuif_current_window = window;
+    window->last_mx = logical_x;
+    window->last_my = logical_y;
+    if (window->root_widget) {
+        cuif_widget_dispatch_mouse_up(window->root_widget, logical_x, logical_y, button);
+    }
+}
+
+void cuif_window_inject_mouse_move(cuif_window* window, float logical_x, float logical_y, int button) {
+    if (!window) return;
+    cuif_current_window = window;
+    float dx = logical_x - window->last_mx;
+    float dy = logical_y - window->last_my;
+    window->last_mx = logical_x;
+    window->last_my = logical_y;
+    if (window->root_widget) {
+        cuif_widget_dispatch_mouse_move(window->root_widget, logical_x, logical_y, dx, dy, button);
+    }
 }

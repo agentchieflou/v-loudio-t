@@ -10,6 +10,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <windows.h>
@@ -504,6 +505,89 @@ static void testFontFreedWhenLastWindowCloses(void) {
     printf("  cuif_global_font is freed and reset to NULL once the last window closes. Pass.\n");
 }
 
+/*
+ * Regression/functional tests for #99/B2 (cuif offscreen rendering mode).
+ */
+static void testOffscreenWindowCreatesAndReadsBackClearColor(void) {
+    printf("Running testOffscreenWindowCreatesAndReadsBackClearColor...\n");
+
+    cuif_window* win = cuif_window_create_offscreen(64, 48, 1.0f);
+    assert(win != NULL);
+    assert(cuif_window_is_offscreen(win));
+
+    cuif_window_render_frame(win); /* no root widget -- exercises just the theme background clear */
+
+    size_t buf_size = (size_t)64 * 48 * 4;
+    unsigned char* pixels = (unsigned char*)malloc(buf_size);
+    assert(pixels != NULL);
+    assert(cuif_window_read_pixels(win, pixels, buf_size));
+
+    cuif_color bg = cuif_get_theme()->background;
+    int expected_r = (int)(bg.r * 255.0f + 0.5f);
+    int expected_g = (int)(bg.g * 255.0f + 0.5f);
+    int expected_b = (int)(bg.b * 255.0f + 0.5f);
+
+    /* Center pixel, well clear of any edge/rounding artifacts. Tolerance of
+     * 2 for float->byte rounding, same margin used elsewhere in this suite
+     * for color comparisons. */
+    size_t center = ((size_t)(48 / 2) * 64 + (64 / 2)) * 4;
+    assert(abs((int)pixels[center + 0] - expected_r) <= 2);
+    assert(abs((int)pixels[center + 1] - expected_g) <= 2);
+    assert(abs((int)pixels[center + 2] - expected_b) <= 2);
+
+    free(pixels);
+    cuif_window_destroy(win);
+
+    printf("  Offscreen window renders into its FBO and read_pixels() returns the correct theme background color. Pass.\n");
+}
+
+static void testOffscreenReadPixelsRejectsUndersizedBuffer(void) {
+    printf("Running testOffscreenReadPixelsRejectsUndersizedBuffer...\n");
+
+    cuif_window* win = cuif_window_create_offscreen(64, 48, 1.0f);
+    assert(win != NULL);
+    cuif_window_render_frame(win);
+
+    unsigned char tooSmall[16];
+    assert(!cuif_window_read_pixels(win, tooSmall, sizeof(tooSmall)));
+
+    /* A regular on-screen window must also reject this call outright --
+     * offscreen readback is not a valid operation on it. */
+    assert(!cuif_window_read_pixels(g_test_window, tooSmall, sizeof(tooSmall)));
+
+    cuif_window_destroy(win);
+    printf("  read_pixels() cleanly rejects an undersized buffer and a non-offscreen window. Pass.\n");
+}
+
+static void testInjectedMouseDownReachesWidgetOnOffscreenWindow(void) {
+    printf("Running testInjectedMouseDownReachesWidgetOnOffscreenWindow...\n");
+
+    cuif_window* win = cuif_window_create_offscreen(300, 30, 1.0f);
+    assert(win != NULL);
+
+    static const char* labels[] = { "Main", "Advanced", "Modulation" };
+    cuif_widget* tabbar = cuif_widget_create_tabbar(0.0f, 0.0f, 300.0f, 30.0f, labels, 3, tabbarChangedCallback);
+    assert(tabbar != NULL);
+    cuif_window_set_root_widget(win, tabbar);
+
+    g_last_tab_change_index = -1;
+    g_tab_change_call_count = 0;
+
+    /* Same click target as testTabbarClickSelectsCorrectTab -- proves
+     * injection reaches the widget tree identically to a real WM_LBUTTONDOWN,
+     * just through cuif_window_inject_mouse_down() instead of cuif_wnd_proc(). */
+    cuif_window_inject_mouse_down(win, 250.0f, 15.0f, 0);
+
+    assert(tabbar->u.tabbar.selected_index == 2);
+    assert(g_last_tab_change_index == 2);
+    assert(g_tab_change_call_count == 1);
+
+    cuif_widget_destroy(tabbar);
+    cuif_window_destroy(win);
+
+    printf("  cuif_window_inject_mouse_down() reaches a widget's callback exactly like a real WM_LBUTTONDOWN would. Pass.\n");
+}
+
 int main(void) {
     printf("==============================\n");
     printf("Starting cuif Framework Tests\n");
@@ -543,6 +627,10 @@ int main(void) {
 
     testGlObjectsShareAcrossTwoWindows();
     testFontFreedWhenLastWindowCloses();
+
+    testOffscreenWindowCreatesAndReadsBackClearColor();
+    testOffscreenReadPixelsRejectsUndersizedBuffer();
+    testInjectedMouseDownReachesWidgetOnOffscreenWindow();
 
     tearDownTestWindow();
 
