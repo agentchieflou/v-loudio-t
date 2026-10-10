@@ -15,10 +15,17 @@
 #include "loudio/dsp/SimpleFFT.h"
 #include "loudio/dsp/FFTAnalyzer.h"
 #include "loudio/dsp/SimpleSmoothedValue.h"
+#include "loudio/dsp/Decibels.h"
+#include "loudio/dsp/LevelDetector.h"
+#include "loudio/dsp/GainComputer.h"
+#include "loudio/dsp/Lookahead.h"
+#include "loudio/dsp/SidechainHpf.h"
+#include "loudio/dsp/Hysteresis.h"
 #include "loudio/plugin/ParamTable.h"
 #include "loudio/plugin/StateBlob.h"
 #include "loudio/plugin/ParamQueue.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -334,6 +341,262 @@ void testParamQueueAllOrNothingAndDrain() {
     std::cout << "  push/pushAll are all-or-nothing (bad index, full queue); drainInto applies in order; clear discards. Pass." << std::endl;
 }
 
+/* ------------------------------------------------------------------------
+ * loudio/dsp dynamics blocks (P6, #132)
+ * ---------------------------------------------------------------------- */
+
+/* Not "near": <windows.h> defines near/far as empty macros, which turned
+ * every call into a bare comma expression on MSVC. */
+static bool approxEqual(float a, float b, float tol) { return std::abs(a - b) <= tol; }
+
+void testDecibelsRoundTripAndFloor() {
+    std::cout << "Running testDecibelsRoundTripAndFloor..." << std::endl;
+
+    assert(approxEqual(loudio::dbToGain(0.0f), 1.0f, 1e-6f));
+    assert(approxEqual(loudio::dbToGain(-6.0206f), 0.5f, 1e-4f));
+    assert(approxEqual(loudio::gainToDb(2.0f), 6.0206f, 1e-3f));
+    for (float db = -90.0f; db <= 24.0f; db += 3.7f) {
+        assert(approxEqual(loudio::gainToDb(loudio::dbToGain(db)), db, 1e-3f));
+    }
+    assert(loudio::gainToDb(0.0f) == loudio::kMinusInfinityDb);
+    assert(loudio::gainToDb(-1.0f) == loudio::kMinusInfinityDb);
+    assert(loudio::gainToDb(1e-9f) == loudio::kMinusInfinityDb); /* floored, not -180 */
+    assert(loudio::dbToGain(loudio::kMinusInfinityDb) == 0.0f);
+
+    std::cout << "  dB<->gain round-trips; silence floors at -100 dB. Pass." << std::endl;
+}
+
+void testGainComputerStaticCurve() {
+    std::cout << "Running testGainComputerStaticCurve..." << std::endl;
+
+    loudio::GainComputer gc;
+    gc.setMode(loudio::GainComputer::Mode::Compressor);
+    gc.setThreshold(-30.0f);
+    gc.setRatio(4.0f);
+    gc.setKneeWidth(0.0f);
+
+    /* The spike's acceptance point: -20 dB in, 4:1 above -30 -> -27.5 out. */
+    assert(approxEqual(gc.outputDb(-20.0f), -27.5f, 1e-4f));
+    assert(approxEqual(gc.gainReductionDb(-20.0f), 7.5f, 1e-4f));
+    assert(gc.gainReductionDb(-40.0f) == 0.0f);   /* below threshold: untouched */
+    assert(approxEqual(gc.outputDb(-30.0f), -30.0f, 1e-5f)); /* exactly at threshold */
+
+    /* Soft knee: continuous at both knee edges, half-ratio slope at T, and
+     * the knee curve lies between the two hard-knee lines. */
+    gc.setKneeWidth(10.0f);
+    assert(approxEqual(gc.outputDb(-35.0f), -35.0f, 1e-4f));           /* lower edge: y = x */
+    assert(approxEqual(gc.outputDb(-25.0f), -30.0f + 5.0f / 4.0f, 1e-4f)); /* upper edge: hard-knee line */
+    float atT = gc.outputDb(-30.0f);
+    assert(atT < -30.0f && atT > -30.0f - 5.0f * 0.75f);
+    assert(approxEqual(atT, -30.0f + (0.25f - 1.0f) * 25.0f / 20.0f, 1e-4f)); /* -30.9375 */
+    for (float x = -36.0f; x <= -24.0f; x += 0.5f) {
+        float y = gc.outputDb(x);
+        float hard = x < -30.0f ? x : -30.0f + (x + 30.0f) / 4.0f;
+        assert(y <= x + 1e-5f);
+        assert(y <= hard + 1e-5f || approxEqual(y, hard, 1e-4f)); /* knee never exceeds hard-knee output */
+    }
+
+    /* Limiter: infinite ratio pins the output at the threshold. */
+    gc.setKneeWidth(0.0f);
+    gc.setRatio(loudio::GainComputer::kInfiniteRatio);
+    gc.setThreshold(-1.0f);
+    assert(approxEqual(gc.outputDb(+6.0f), -1.0f, 1e-4f));
+    assert(approxEqual(gc.gainReductionDb(+6.0f), 7.0f, 1e-4f));
+
+    /* Expander / gate: 1:4 below -40, floor at 20 dB of range. */
+    gc.setMode(loudio::GainComputer::Mode::Expander);
+    gc.setThreshold(-40.0f);
+    gc.setRatio(4.0f);
+    gc.setRange(20.0f);
+    assert(gc.gainReductionDb(-30.0f) == 0.0f);           /* above threshold */
+    assert(approxEqual(gc.outputDb(-42.0f), -48.0f, 1e-4f));     /* 2 dB under -> 8 dB under */
+    assert(approxEqual(gc.gainReductionDb(-42.0f), 6.0f, 1e-4f));
+    assert(approxEqual(gc.gainReductionDb(-60.0f), 20.0f, 1e-4f)); /* would be 60, clamped by range */
+    gc.setKneeWidth(6.0f);
+    assert(approxEqual(gc.outputDb(-37.0f), -37.0f, 1e-4f));     /* upper knee edge: untouched */
+    assert(approxEqual(gc.outputDb(-43.0f), -40.0f + (-3.0f) * 4.0f, 1e-4f)); /* lower edge: hard line */
+    assert(gc.outputDb(-40.0f) < -40.0f);                 /* knee bites a little at T */
+
+    std::cout << "  Compressor hard/soft knee, limiter and ranged expander curves match the formulas. Pass." << std::endl;
+}
+
+void testLevelDetectorTimeConstantsHoldAndRms() {
+    std::cout << "Running testLevelDetectorTimeConstantsHoldAndRms..." << std::endl;
+
+    const double fs = 48000.0;
+    loudio::LevelDetector det;
+    det.setAttackRelease(10.0f, 100.0f);
+    det.prepare(fs);
+
+    /* Step 0 -> 1: 63.2% after one attack time. */
+    const int attackSamples = 480;
+    float env = 0.0f;
+    for (int n = 0; n < attackSamples; ++n) env = det.process(1.0f);
+    assert(approxEqual(env, 1.0f - std::exp(-1.0f), 0.01f));
+    for (int n = 0; n < 48000; ++n) env = det.process(1.0f);
+    assert(approxEqual(env, 1.0f, 1e-3f));
+
+    /* Step 1 -> 0: 36.8% after one release time. */
+    for (int n = 0; n < 4800; ++n) env = det.process(0.0f);
+    assert(approxEqual(env, std::exp(-1.0f), 0.01f));
+
+    /* Hold freezes the envelope before release starts, then releases. */
+    det.setHold(5.0f); /* 240 samples */
+    det.clear();
+    for (int n = 0; n < 48000; ++n) det.process(1.0f);
+    float held = det.process(0.0f);
+    for (int n = 0; n < 238; ++n) {
+        float v = det.process(0.0f);
+        assert(v == held);
+    }
+    for (int n = 0; n < 10; ++n) env = det.process(0.0f);
+    assert(env < held);
+
+    /* A new peak during the hold restarts it. */
+    det.setHold(5.0f);
+    det.clear();
+    for (int n = 0; n < 48000; ++n) det.process(1.0f);
+    for (int n = 0; n < 200; ++n) det.process(0.0f);
+    for (int n = 0; n < 48000; ++n) det.process(1.0f);
+    held = det.process(0.0f);
+    for (int n = 0; n < 230; ++n) assert(det.process(0.0f) == held);
+
+    /* RMS of a full-scale sine reads 0.707 (-3.01 dB) once settled. */
+    loudio::LevelDetector rms;
+    rms.setMode(loudio::LevelDetector::Mode::Rms);
+    rms.setAttackRelease(50.0f, 50.0f);
+    rms.prepare(fs);
+    float level = 0.0f;
+    for (int n = 0; n < 48000; ++n) level = rms.process(std::sin(2.0f * (float)M_PI * 1000.0f * (float)n / (float)fs));
+    assert(approxEqual(level, 0.7071f, 0.01f));
+    assert(approxEqual(rms.currentLevel(), level, 1e-6f));
+    assert(approxEqual(loudio::gainToDb(level), -3.01f, 0.15f));
+
+    /* Silence reads the floor, not NaN. */
+    rms.clear();
+    assert(rms.processDb(0.0f) == loudio::kMinusInfinityDb);
+
+    std::cout << "  Attack 63%, release 37%, hold freezes/restarts, RMS sine = -3 dB. Pass." << std::endl;
+}
+
+void testLookaheadDelaysByReportedLatency() {
+    std::cout << "Running testLookaheadDelaysByReportedLatency..." << std::endl;
+
+    for (int delay : { 0, 1, 7, 64, 256 }) {
+        loudio::Lookahead la;
+        la.setDelaySamples(delay);
+        la.prepare(256);
+        assert(la.latencySamples() == delay);
+        int arrived = -1;
+        for (int n = 0; n < 600; ++n) {
+            float out = la.process(n == 0 ? 1.0f : 0.0f);
+            if (out != 0.0f) {
+                assert(arrived == -1); /* exactly one non-zero sample */
+                assert(out == 1.0f);
+                arrived = n;
+            }
+        }
+        assert(arrived == delay);
+    }
+
+    /* Clamped to the prepared maximum. */
+    loudio::Lookahead la;
+    la.prepare(16);
+    la.setDelaySamples(1000);
+    assert(la.latencySamples() == 16);
+
+    std::cout << "  An impulse arrives exactly latencySamples() later for delays 0..256. Pass." << std::endl;
+}
+
+static float steadyStateAmplitude(loudio::SidechainHpf& f, float hz, double fs) {
+    float peak = 0.0f;
+    for (int n = 0; n < (int)fs; ++n) {
+        float y = f.process(std::sin(2.0f * (float)M_PI * hz * (float)n / (float)fs));
+        if (n > (int)fs / 2 && std::abs(y) > peak) peak = std::abs(y);
+    }
+    return peak;
+}
+
+void testSidechainHpfAttenuatesBass() {
+    std::cout << "Running testSidechainHpfAttenuatesBass..." << std::endl;
+
+    const double fs = 48000.0;
+    loudio::SidechainHpf hpf;
+    hpf.prepare(fs);
+    hpf.setCutoff(200.0f);
+
+    float at50 = steadyStateAmplitude(hpf, 50.0f, fs);
+    hpf.clear();
+    float at200 = steadyStateAmplitude(hpf, 200.0f, fs);
+    hpf.clear();
+    float at2k = steadyStateAmplitude(hpf, 2000.0f, fs);
+    assert(loudio::gainToDb(at50) < -20.0f);              /* 2 octaves below: ~ -24 dB */
+    assert(approxEqual(loudio::gainToDb(at200), -3.0f, 0.3f));   /* Butterworth: -3 dB at cutoff */
+    assert(approxEqual(loudio::gainToDb(at2k), 0.0f, 0.1f));     /* passband */
+
+    /* Cutoff 0 bypasses exactly. */
+    hpf.setCutoff(0.0f);
+    assert(hpf.process(0.37f) == 0.37f);
+
+    /* The new biquad makers more generally: low-pass mirrors, notch nulls. */
+    SimpleBiquad lp; lp.makeLowPass(fs, 200.0f, 0.70710678f);
+    SimpleBiquad notch; notch.makeNotch(fs, 1000.0f, 2.0f);
+    float lpAt2k = 0.0f, notchAt1k = 0.0f, notchAt3k = 0.0f;
+    for (int n = 0; n < 48000; ++n) {
+        float y1 = lp.processSample(std::sin(2.0f * (float)M_PI * 2000.0f * (float)n / (float)fs));
+        float y2 = notch.processSample(std::sin(2.0f * (float)M_PI * 1000.0f * (float)n / (float)fs));
+        if (n > 24000) { lpAt2k = std::max(lpAt2k, std::abs(y1)); notchAt1k = std::max(notchAt1k, std::abs(y2)); }
+    }
+    notch.reset();
+    for (int n = 0; n < 48000; ++n) {
+        float y = notch.processSample(std::sin(2.0f * (float)M_PI * 3000.0f * (float)n / (float)fs));
+        if (n > 24000) notchAt3k = std::max(notchAt3k, std::abs(y));
+    }
+    assert(loudio::gainToDb(lpAt2k) < -35.0f);
+    assert(loudio::gainToDb(notchAt1k) < -40.0f);
+    assert(loudio::gainToDb(notchAt3k) > -1.5f);
+
+    std::cout << "  HPF: -3 dB at cutoff, >20 dB down two octaves below, flat above; LP/notch makers behave. Pass." << std::endl;
+}
+
+void testHysteresisHasNoChatter() {
+    std::cout << "Running testHysteresisHasNoChatter..." << std::endl;
+
+    loudio::Hysteresis h;
+    h.setThresholds(-40.0f, -46.0f);
+    assert(!h.open());
+
+    /* A level wobbling +-1 dB around the open threshold toggles a single
+     * threshold every sample; with 6 dB of hysteresis it opens once and
+     * stays open. */
+    int transitions = 0;
+    bool prev = h.open();
+    for (int n = 0; n < 1000; ++n) {
+        bool now = h.process(-40.0f + ((n & 1) ? 1.0f : -1.0f));
+        if (now != prev) ++transitions;
+        prev = now;
+    }
+    assert(transitions == 1 && h.open());
+
+    /* Falls below close: closes once; wobbling around close stays closed. */
+    assert(!h.process(-47.0f));
+    transitions = 0; prev = false;
+    for (int n = 0; n < 1000; ++n) {
+        bool now = h.process(-46.0f + ((n & 1) ? 0.5f : -0.5f));
+        if (now != prev) ++transitions;
+        prev = now;
+    }
+    assert(transitions == 0 && !h.open());
+
+    /* close > open is clamped to open. */
+    h.setThresholds(-30.0f, -20.0f);
+    h.reset(true);
+    assert(h.process(-31.0f) == false);
+    assert(h.process(-29.0f) == true);
+
+    std::cout << "  Opens above open, closes below close, no toggling in between. Pass." << std::endl;
+}
+
 int main() {
     std::cout << "==============================" << std::endl;
     std::cout << "Starting Loudio DSP component tests" << std::endl;
@@ -348,6 +611,12 @@ int main() {
     testStateBlobRejectsCorruptInputAtomically();
     testStateBlobLegacyRawArray();
     testParamQueueAllOrNothingAndDrain();
+    testDecibelsRoundTripAndFloor();
+    testGainComputerStaticCurve();
+    testLevelDetectorTimeConstantsHoldAndRms();
+    testLookaheadDelaysByReportedLatency();
+    testSidechainHpfAttenuatesBass();
+    testHysteresisHasNoChatter();
 
     std::cout << "All DSP component tests passed successfully!" << std::endl;
     return 0;
