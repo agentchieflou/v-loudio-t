@@ -345,16 +345,18 @@ void testParamQueueAllOrNothingAndDrain() {
  * loudio/dsp dynamics blocks (P6, #132)
  * ---------------------------------------------------------------------- */
 
-static bool near(float a, float b, float tol) { return std::abs(a - b) <= tol; }
+/* Not "near": <windows.h> defines near/far as empty macros, which turned
+ * every call into a bare comma expression on MSVC. */
+static bool approxEqual(float a, float b, float tol) { return std::abs(a - b) <= tol; }
 
 void testDecibelsRoundTripAndFloor() {
     std::cout << "Running testDecibelsRoundTripAndFloor..." << std::endl;
 
-    assert(near(loudio::dbToGain(0.0f), 1.0f, 1e-6f));
-    assert(near(loudio::dbToGain(-6.0206f), 0.5f, 1e-4f));
-    assert(near(loudio::gainToDb(2.0f), 6.0206f, 1e-3f));
+    assert(approxEqual(loudio::dbToGain(0.0f), 1.0f, 1e-6f));
+    assert(approxEqual(loudio::dbToGain(-6.0206f), 0.5f, 1e-4f));
+    assert(approxEqual(loudio::gainToDb(2.0f), 6.0206f, 1e-3f));
     for (float db = -90.0f; db <= 24.0f; db += 3.7f) {
-        assert(near(loudio::gainToDb(loudio::dbToGain(db)), db, 1e-3f));
+        assert(approxEqual(loudio::gainToDb(loudio::dbToGain(db)), db, 1e-3f));
     }
     assert(loudio::gainToDb(0.0f) == loudio::kMinusInfinityDb);
     assert(loudio::gainToDb(-1.0f) == loudio::kMinusInfinityDb);
@@ -374,32 +376,32 @@ void testGainComputerStaticCurve() {
     gc.setKneeWidth(0.0f);
 
     /* The spike's acceptance point: -20 dB in, 4:1 above -30 -> -27.5 out. */
-    assert(near(gc.outputDb(-20.0f), -27.5f, 1e-4f));
-    assert(near(gc.gainReductionDb(-20.0f), 7.5f, 1e-4f));
+    assert(approxEqual(gc.outputDb(-20.0f), -27.5f, 1e-4f));
+    assert(approxEqual(gc.gainReductionDb(-20.0f), 7.5f, 1e-4f));
     assert(gc.gainReductionDb(-40.0f) == 0.0f);   /* below threshold: untouched */
-    assert(near(gc.outputDb(-30.0f), -30.0f, 1e-5f)); /* exactly at threshold */
+    assert(approxEqual(gc.outputDb(-30.0f), -30.0f, 1e-5f)); /* exactly at threshold */
 
     /* Soft knee: continuous at both knee edges, half-ratio slope at T, and
      * the knee curve lies between the two hard-knee lines. */
     gc.setKneeWidth(10.0f);
-    assert(near(gc.outputDb(-35.0f), -35.0f, 1e-4f));           /* lower edge: y = x */
-    assert(near(gc.outputDb(-25.0f), -30.0f + 5.0f / 4.0f, 1e-4f)); /* upper edge: hard-knee line */
+    assert(approxEqual(gc.outputDb(-35.0f), -35.0f, 1e-4f));           /* lower edge: y = x */
+    assert(approxEqual(gc.outputDb(-25.0f), -30.0f + 5.0f / 4.0f, 1e-4f)); /* upper edge: hard-knee line */
     float atT = gc.outputDb(-30.0f);
     assert(atT < -30.0f && atT > -30.0f - 5.0f * 0.75f);
-    assert(near(atT, -30.0f + (0.25f - 1.0f) * 25.0f / 20.0f, 1e-4f)); /* -30.9375 */
+    assert(approxEqual(atT, -30.0f + (0.25f - 1.0f) * 25.0f / 20.0f, 1e-4f)); /* -30.9375 */
     for (float x = -36.0f; x <= -24.0f; x += 0.5f) {
         float y = gc.outputDb(x);
         float hard = x < -30.0f ? x : -30.0f + (x + 30.0f) / 4.0f;
         assert(y <= x + 1e-5f);
-        assert(y <= hard + 1e-5f || near(y, hard, 1e-4f)); /* knee never exceeds hard-knee output */
+        assert(y <= hard + 1e-5f || approxEqual(y, hard, 1e-4f)); /* knee never exceeds hard-knee output */
     }
 
     /* Limiter: infinite ratio pins the output at the threshold. */
     gc.setKneeWidth(0.0f);
     gc.setRatio(loudio::GainComputer::kInfiniteRatio);
     gc.setThreshold(-1.0f);
-    assert(near(gc.outputDb(+6.0f), -1.0f, 1e-4f));
-    assert(near(gc.gainReductionDb(+6.0f), 7.0f, 1e-4f));
+    assert(approxEqual(gc.outputDb(+6.0f), -1.0f, 1e-4f));
+    assert(approxEqual(gc.gainReductionDb(+6.0f), 7.0f, 1e-4f));
 
     /* Expander / gate: 1:4 below -40, floor at 20 dB of range. */
     gc.setMode(loudio::GainComputer::Mode::Expander);
@@ -407,12 +409,12 @@ void testGainComputerStaticCurve() {
     gc.setRatio(4.0f);
     gc.setRange(20.0f);
     assert(gc.gainReductionDb(-30.0f) == 0.0f);           /* above threshold */
-    assert(near(gc.outputDb(-42.0f), -48.0f, 1e-4f));     /* 2 dB under -> 8 dB under */
-    assert(near(gc.gainReductionDb(-42.0f), 6.0f, 1e-4f));
-    assert(near(gc.gainReductionDb(-60.0f), 20.0f, 1e-4f)); /* would be 60, clamped by range */
+    assert(approxEqual(gc.outputDb(-42.0f), -48.0f, 1e-4f));     /* 2 dB under -> 8 dB under */
+    assert(approxEqual(gc.gainReductionDb(-42.0f), 6.0f, 1e-4f));
+    assert(approxEqual(gc.gainReductionDb(-60.0f), 20.0f, 1e-4f)); /* would be 60, clamped by range */
     gc.setKneeWidth(6.0f);
-    assert(near(gc.outputDb(-37.0f), -37.0f, 1e-4f));     /* upper knee edge: untouched */
-    assert(near(gc.outputDb(-43.0f), -40.0f + (-3.0f) * 4.0f, 1e-4f)); /* lower edge: hard line */
+    assert(approxEqual(gc.outputDb(-37.0f), -37.0f, 1e-4f));     /* upper knee edge: untouched */
+    assert(approxEqual(gc.outputDb(-43.0f), -40.0f + (-3.0f) * 4.0f, 1e-4f)); /* lower edge: hard line */
     assert(gc.outputDb(-40.0f) < -40.0f);                 /* knee bites a little at T */
 
     std::cout << "  Compressor hard/soft knee, limiter and ranged expander curves match the formulas. Pass." << std::endl;
@@ -430,13 +432,13 @@ void testLevelDetectorTimeConstantsHoldAndRms() {
     const int attackSamples = 480;
     float env = 0.0f;
     for (int n = 0; n < attackSamples; ++n) env = det.process(1.0f);
-    assert(near(env, 1.0f - std::exp(-1.0f), 0.01f));
+    assert(approxEqual(env, 1.0f - std::exp(-1.0f), 0.01f));
     for (int n = 0; n < 48000; ++n) env = det.process(1.0f);
-    assert(near(env, 1.0f, 1e-3f));
+    assert(approxEqual(env, 1.0f, 1e-3f));
 
     /* Step 1 -> 0: 36.8% after one release time. */
     for (int n = 0; n < 4800; ++n) env = det.process(0.0f);
-    assert(near(env, std::exp(-1.0f), 0.01f));
+    assert(approxEqual(env, std::exp(-1.0f), 0.01f));
 
     /* Hold freezes the envelope before release starts, then releases. */
     det.setHold(5.0f); /* 240 samples */
@@ -466,9 +468,9 @@ void testLevelDetectorTimeConstantsHoldAndRms() {
     rms.prepare(fs);
     float level = 0.0f;
     for (int n = 0; n < 48000; ++n) level = rms.process(std::sin(2.0f * (float)M_PI * 1000.0f * (float)n / (float)fs));
-    assert(near(level, 0.7071f, 0.01f));
-    assert(near(rms.currentLevel(), level, 1e-6f));
-    assert(near(loudio::gainToDb(level), -3.01f, 0.15f));
+    assert(approxEqual(level, 0.7071f, 0.01f));
+    assert(approxEqual(rms.currentLevel(), level, 1e-6f));
+    assert(approxEqual(loudio::gainToDb(level), -3.01f, 0.15f));
 
     /* Silence reads the floor, not NaN. */
     rms.clear();
@@ -529,8 +531,8 @@ void testSidechainHpfAttenuatesBass() {
     hpf.clear();
     float at2k = steadyStateAmplitude(hpf, 2000.0f, fs);
     assert(loudio::gainToDb(at50) < -20.0f);              /* 2 octaves below: ~ -24 dB */
-    assert(near(loudio::gainToDb(at200), -3.0f, 0.3f));   /* Butterworth: -3 dB at cutoff */
-    assert(near(loudio::gainToDb(at2k), 0.0f, 0.1f));     /* passband */
+    assert(approxEqual(loudio::gainToDb(at200), -3.0f, 0.3f));   /* Butterworth: -3 dB at cutoff */
+    assert(approxEqual(loudio::gainToDb(at2k), 0.0f, 0.1f));     /* passband */
 
     /* Cutoff 0 bypasses exactly. */
     hpf.setCutoff(0.0f);
