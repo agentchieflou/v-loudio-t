@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <cstdint>
 #include <vector>
 #include <algorithm>
 
@@ -366,18 +367,107 @@ bool ReverbCore::setParameterValue(int index, float value) {
     return cuif_spsc_write(&paramUpdateRingBuffer, (const unsigned char*)&msg, sizeof(msg)) == sizeof(msg);
 }
 
+/*
+ * State blob format v1 (all integers little-endian, as written on x86/x64):
+ *
+ *   "LRVB"                      4-byte magic
+ *   u16 version = 1
+ *   u16 entryCount
+ *   entryCount x { u8 idLen; char id[idLen]; f32 value; }
+ *
+ * Keyed on kReverbParams[].id, never on index -- the rule lpi.h states for
+ * every LPI plugin -- so inserting or reordering parameters can't silently
+ * load a preset's values into the wrong parameters. On load: unknown ids
+ * are skipped (a newer build's preset loads in an older build), parameters
+ * missing from the blob get their default (an older preset loads in a newer
+ * build), values are clamped to the parameter's range, non-finite values
+ * fall back to the default. The blob is fully validated before anything is
+ * applied, so a truncated/corrupt blob leaves the current state untouched.
+ *
+ * Legacy: before this format existed getState() wrote the raw float array
+ * (kLegacyParamCount floats, positional). A blob of exactly that size with
+ * no magic is still accepted, mapped positionally to that original order.
+ */
+namespace {
+const unsigned char kStateMagic[4] = { 'L', 'R', 'V', 'B' };
+const uint16_t kStateVersion = 1;
+const int kLegacyParamCount = 23; /* table size when the raw-array format was written */
+
+float sanitizeParam(int index, float v) {
+    const ReverbParamMeta& m = kReverbParams[index];
+    if (!std::isfinite(v)) return m.defaultValue;
+    if (v < m.minValue) return m.minValue;
+    if (v > m.maxValue) return m.maxValue;
+    return v;
+}
+
+int findParamById(const char* id, size_t len) {
+    for (int i = 0; i < kNumParams; ++i) {
+        if (std::strlen(kReverbParams[i].id) == len && std::memcmp(kReverbParams[i].id, id, len) == 0) return i;
+    }
+    return -1;
+}
+} // namespace
+
 size_t ReverbCore::getState(void* buffer, size_t bufferSize) const {
-    size_t required = sizeof(float) * kNumParams;
+    size_t required = sizeof(kStateMagic) + 2 * sizeof(uint16_t);
+    for (int i = 0; i < kNumParams; ++i) {
+        required += 1 + std::strlen(kReverbParams[i].id) + sizeof(float);
+    }
     if (buffer == nullptr) return required;
     if (bufferSize < required) return 0;
-    std::memcpy(buffer, params, required);
+
+    unsigned char* out = static_cast<unsigned char*>(buffer);
+    std::memcpy(out, kStateMagic, sizeof(kStateMagic)); out += sizeof(kStateMagic);
+    uint16_t version = kStateVersion, count = (uint16_t)kNumParams;
+    std::memcpy(out, &version, sizeof(version)); out += sizeof(version);
+    std::memcpy(out, &count, sizeof(count)); out += sizeof(count);
+    for (int i = 0; i < kNumParams; ++i) {
+        size_t idLen = std::strlen(kReverbParams[i].id);
+        *out++ = (unsigned char)idLen;
+        std::memcpy(out, kReverbParams[i].id, idLen); out += idLen;
+        std::memcpy(out, &params[i], sizeof(float)); out += sizeof(float);
+    }
     return required;
 }
 
 bool ReverbCore::setState(const void* data, size_t size) {
-    size_t required = sizeof(float) * kNumParams;
-    if (!data || size < required) return false;
-    std::memcpy(params, data, required);
+    if (!data) return false;
+    const unsigned char* in = static_cast<const unsigned char*>(data);
+    float loaded[kNumParams];
+
+    if (size == sizeof(float) * kLegacyParamCount && std::memcmp(in, kStateMagic, sizeof(kStateMagic)) != 0) {
+        for (int i = 0; i < kNumParams; ++i) loaded[i] = kReverbParams[i].defaultValue;
+        for (int i = 0; i < kLegacyParamCount && i < kNumParams; ++i) {
+            float v;
+            std::memcpy(&v, in + i * sizeof(float), sizeof(float));
+            loaded[i] = sanitizeParam(i, v);
+        }
+        std::memcpy(params, loaded, sizeof(params));
+        return true;
+    }
+
+    const unsigned char* end = in + size;
+    if (size < sizeof(kStateMagic) + 2 * sizeof(uint16_t)) return false;
+    if (std::memcmp(in, kStateMagic, sizeof(kStateMagic)) != 0) return false;
+    in += sizeof(kStateMagic);
+    uint16_t version, count;
+    std::memcpy(&version, in, sizeof(version)); in += sizeof(version);
+    std::memcpy(&count, in, sizeof(count)); in += sizeof(count);
+    if (version != kStateVersion) return false; /* a future v2 needs its own reader */
+
+    for (int i = 0; i < kNumParams; ++i) loaded[i] = kReverbParams[i].defaultValue;
+    for (uint16_t e = 0; e < count; ++e) {
+        if (end - in < 1) return false;
+        size_t idLen = *in++;
+        if ((size_t)(end - in) < idLen + sizeof(float)) return false;
+        const char* id = reinterpret_cast<const char*>(in); in += idLen;
+        float v;
+        std::memcpy(&v, in, sizeof(float)); in += sizeof(float);
+        int index = findParamById(id, idLen);
+        if (index >= 0) loaded[index] = sanitizeParam(index, v);
+    }
+    std::memcpy(params, loaded, sizeof(params));
     return true;
 }
 
