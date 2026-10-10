@@ -14,7 +14,7 @@
 #include <string.h>
 #include "lpi/lpi.h"
 
-/* Not CHECK(): several checks below have side effects (activate, open,
+/* Not assert(): several checks below have side effects (activate, open,
  * render, read_pixels) and must run under NDEBUG too. */
 #define CHECK(cond) do { if (!(cond)) { \
     fprintf(stderr, "CHECK failed: %s (%s:%d)\n", #cond, __FILE__, __LINE__); exit(1); } } while (0)
