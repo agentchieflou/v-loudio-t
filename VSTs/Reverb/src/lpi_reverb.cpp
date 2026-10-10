@@ -24,6 +24,10 @@
 #include <cstring>
 #include <new>
 
+static_assert(loudio::kParamBoolean == LPI_PARAM_BOOLEAN, "ParamFlags must mirror LPI_PARAM_*");
+static_assert(loudio::kParamStepped == LPI_PARAM_STEPPED, "ParamFlags must mirror LPI_PARAM_*");
+static_assert(loudio::kParamReadOnly == LPI_PARAM_READONLY, "ParamFlags must mirror LPI_PARAM_*");
+
 namespace {
 
 constexpr int   kPanelW = 800;
@@ -174,9 +178,7 @@ bool apiParamInfo(lpi_plugin* p, uint32_t index, lpi_parameter_info* out) {
     out->min_value = m.minValue;
     out->max_value = m.maxValue;
     out->default_value = m.defaultValue;
-    out->flags = 0;
-    if (m.index == kParamFreeze) out->flags |= LPI_PARAM_BOOLEAN;
-    if (m.index == kParamMode || m.index == kParamUiTheme) out->flags |= LPI_PARAM_STEPPED;
+    out->flags = m.flags; /* loudio::ParamFlags == LPI_PARAM_* bit for bit (asserted above) */
     return true;
 }
 

@@ -288,6 +288,17 @@ void testReverbParamTableIndexIntegrity() {
     for (int i = 0; i < kNumParams; ++i) {
         assert(kReverbParams[i].index == i);
     }
+    assert(kReverbParamTable.indicesAreConsistent());
+    assert(&ReverbCore::table() == &kReverbParamTable);
+
+    /* The flags the LPI wrapper forwards verbatim (#127): freeze is the
+     * only boolean, the two dropdowns are the only stepped parameters. */
+    for (int i = 0; i < kNumParams; ++i) {
+        uint32_t want = 0;
+        if (i == kParamFreeze) want = loudio::kParamBoolean;
+        if (i == kParamMode || i == kParamUiTheme) want = loudio::kParamStepped;
+        assert(kReverbParams[i].flags == want);
+    }
 
     std::cout << "  kReverbParams[i].index == i holds for every parameter -- order can't silently drift. Pass." << std::endl;
 }
