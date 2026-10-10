@@ -1,5 +1,5 @@
 #pragma once
-#include "DelayLine.h"
+#include "loudio/dsp/DelayLine.h"
 #include <vector>
 
 class SchroederAllPass {

@@ -46,5 +46,6 @@ Decided in Epic #97 and built in #106 (B1), #108 (B2), #109 (B3), #111/#114 (B4)
 - **Editor delivery for noprod** is the `lpi.gui.offscreen.v1` extension. cuif renders into an FBO (`cuif_window_create_offscreen`), the host pulls top-left RGBA8 frames with `read_pixels`, and it relays logical-pixel mouse events back. All GUI calls and `set_parameter_value` run on one host thread. v1 allows one open editor per process.
 - **VST3 hosts (Ableton, Reaper, …)** keep the native-window editor through JUCE, as in §3.
 - **Extensions beyond the editor:** `lpi.latency.v1` (delay compensation) and `lpi.params.changes.v1` (editor-originated parameter changes with gesture begin/end, pull-based) — #120, built to the noprod host's stated needs. Bypass, transport/tempo, MIDI and sidechain are deliberately not built until a host needs them.
+- **Shared DSP:** the JUCE-free building blocks (delay line, all-pass diffuser, early reflections, filters, crossover, envelope detector, FFT/analyzer, smoother) live in `DSP/include/loudio/dsp` as a header-only library with its own tests, so the next plugin starts from them rather than from `VSTs/Reverb/src`.
 - **Shared editor:** both editors build the same widget tree via `ReverbUi` (#119), which sends edits through a host-supplied callback.
 

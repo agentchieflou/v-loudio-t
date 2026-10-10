@@ -2,7 +2,21 @@
 #define CUIF_RING_BUFFER_H
 
 #include <stddef.h>
+
+/*
+ * Index type + full memory fence per platform. MSVC: volatile + MemoryBarrier()
+ * (see the ordering note below). Everything else (the Linux DSP test job,
+ * a future dlopen host): the GCC/Clang atomic builtin fence.
+ */
+#if defined(_WIN32)
 #include <windows.h>
+typedef LONG64 cuif_spsc_index;
+#define CUIF_SPSC_FENCE() MemoryBarrier()
+#else
+#include <stdint.h>
+typedef int64_t cuif_spsc_index;
+#define CUIF_SPSC_FENCE() __atomic_thread_fence(__ATOMIC_SEQ_CST)
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,7 +34,8 @@ extern "C" {
  * <stdatomic.h> -- the MSVC toolchain used to build this project does not
  * reliably support C11 atomics without extra experimental flags, whereas
  * this pattern (correct on x86/x64's strongly-ordered memory model) needs
- * nothing beyond <windows.h>.
+ * nothing beyond <windows.h>. Off Windows the same shape uses the compiler
+ * fence builtin (CUIF_SPSC_FENCE above).
  *
  * `capacity` must be a power of two. One instance is single-producer,
  * single-consumer only -- do not share a producer or consumer role across
@@ -30,8 +45,8 @@ typedef struct {
     unsigned char* data;
     size_t capacity; /* power of two */
     size_t mask;
-    volatile LONG64 write_index; /* written only by the producer */
-    volatile LONG64 read_index;  /* written only by the consumer */
+    volatile cuif_spsc_index write_index; /* written only by the producer */
+    volatile cuif_spsc_index read_index;  /* written only by the consumer */
 } cuif_spsc_ring_buffer;
 
 static inline void cuif_spsc_init(cuif_spsc_ring_buffer* rb, unsigned char* storage, size_t capacity_pow2) {
@@ -43,16 +58,16 @@ static inline void cuif_spsc_init(cuif_spsc_ring_buffer* rb, unsigned char* stor
 }
 
 static inline size_t cuif_spsc_writable(cuif_spsc_ring_buffer* rb) {
-    LONG64 w = rb->write_index;
-    MemoryBarrier();
-    LONG64 r = rb->read_index;
+    cuif_spsc_index w = rb->write_index;
+    CUIF_SPSC_FENCE();
+    cuif_spsc_index r = rb->read_index;
     return rb->capacity - (size_t)(w - r);
 }
 
 static inline size_t cuif_spsc_readable(cuif_spsc_ring_buffer* rb) {
-    LONG64 w = rb->write_index;
-    MemoryBarrier();
-    LONG64 r = rb->read_index;
+    cuif_spsc_index w = rb->write_index;
+    CUIF_SPSC_FENCE();
+    cuif_spsc_index r = rb->read_index;
     return (size_t)(w - r);
 }
 
@@ -60,12 +75,12 @@ static inline size_t cuif_spsc_readable(cuif_spsc_ring_buffer* rb) {
 static inline size_t cuif_spsc_write(cuif_spsc_ring_buffer* rb, const unsigned char* src, size_t len) {
     size_t avail = cuif_spsc_writable(rb);
     if (len > avail) len = avail;
-    LONG64 w = rb->write_index;
+    cuif_spsc_index w = rb->write_index;
     for (size_t i = 0; i < len; ++i) {
         rb->data[((size_t)w + i) & rb->mask] = src[i];
     }
-    MemoryBarrier();
-    rb->write_index = w + (LONG64)len;
+    CUIF_SPSC_FENCE();
+    rb->write_index = w + (cuif_spsc_index)len;
     return len;
 }
 
@@ -73,12 +88,12 @@ static inline size_t cuif_spsc_write(cuif_spsc_ring_buffer* rb, const unsigned c
 static inline size_t cuif_spsc_read(cuif_spsc_ring_buffer* rb, unsigned char* dst, size_t len) {
     size_t avail = cuif_spsc_readable(rb);
     if (len > avail) len = avail;
-    LONG64 r = rb->read_index;
+    cuif_spsc_index r = rb->read_index;
     for (size_t i = 0; i < len; ++i) {
         dst[i] = rb->data[((size_t)r + i) & rb->mask];
     }
-    MemoryBarrier();
-    rb->read_index = r + (LONG64)len;
+    CUIF_SPSC_FENCE();
+    rb->read_index = r + (cuif_spsc_index)len;
     return len;
 }
 

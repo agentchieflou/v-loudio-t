@@ -4,6 +4,15 @@ project(LoudioReverb VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Shared DSP building blocks (DSP/include/loudio/dsp), header-only.
+set(LOUDIO_DSP_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/../../DSP/include)
+
+# ON: build only dsp_tests -- no JUCE submodule, no plugin targets. This is
+# what the Linux CI job uses for fast DSP feedback; the full plugin build
+# stays Windows-only.
+option(LOUDIO_REVERB_TESTS_ONLY "Build only the DSP tests (skips JUCE and all plugin targets)" OFF)
+
+if(NOT LOUDIO_REVERB_TESTS_ONLY)
 add_subdirectory(JUCE)
 
 juce_add_plugin(LoudioReverb
@@ -35,7 +44,7 @@ target_sources(LoudioReverb PRIVATE
     ../../Framework/src/theme_greens.c
 )
 
-target_include_directories(LoudioReverb PRIVATE src ../../Framework/include)
+target_include_directories(LoudioReverb PRIVATE src ../../Framework/include ${LOUDIO_DSP_INCLUDE})
 
 target_compile_definitions(LoudioReverb PUBLIC
     JUCE_WEB_BROWSER=0
@@ -63,6 +72,7 @@ PUBLIC
 if(TARGET LoudioReverb_Standalone)
     target_link_libraries(LoudioReverb_Standalone PRIVATE juce::juce_audio_utils)
 endif()
+endif() # NOT LOUDIO_REVERB_TESTS_ONLY
 
 option(LOUDIO_REVERB_BUILD_TESTS "Build DSP unit tests executable" ON)
 if(LOUDIO_REVERB_BUILD_TESTS)
@@ -73,7 +83,7 @@ if(LOUDIO_REVERB_BUILD_TESTS)
         ../../Framework/src/theme_hello_kitty.c
         ../../Framework/src/theme_greens.c
     )
-    target_include_directories(dsp_tests PRIVATE src ../../Framework/include)
+    target_include_directories(dsp_tests PRIVATE src ../../Framework/include ${LOUDIO_DSP_INCLUDE})
     # Golden impulse responses for the null test (#44) live next to the
     # sources, not in the build tree, so dsp_tests finds them from any cwd.
     # NOMINMAX: cuif/ring_buffer.h pulls in <windows.h>, whose min/max
@@ -102,7 +112,7 @@ if(LOUDIO_REVERB_BUILD_LPI AND WIN32)
         ../../Framework/src/theme_hello_kitty.c
         ../../Framework/src/theme_greens.c
     )
-    target_include_directories(lpi_reverb PRIVATE src ../../Framework/include ../../PluginABI/include)
+    target_include_directories(lpi_reverb PRIVATE src ../../Framework/include ../../PluginABI/include ${LOUDIO_DSP_INCLUDE})
     target_compile_definitions(lpi_reverb PRIVATE UNICODE _UNICODE NOMINMAX)
     target_link_libraries(lpi_reverb PRIVATE opengl32 gdi32 user32)
     set_target_properties(lpi_reverb PROPERTIES
