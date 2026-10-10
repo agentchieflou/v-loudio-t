@@ -9,11 +9,18 @@ set(LOUDIO_DSP_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/../../DSP/include)
 
 # ON: build only dsp_tests -- no JUCE submodule, no plugin targets. This is
 # what the Linux CI job uses for fast DSP feedback; the full plugin build
-# stays Windows-only.
-option(LOUDIO_REVERB_TESTS_ONLY "Build only the DSP tests (skips JUCE and all plugin targets)" OFF)
+# stays Windows-only. LOUDIO_PLUGIN_TESTS_ONLY is the name every plugin
+# shares (the CI matrix passes it); LOUDIO_REVERB_TESTS_ONLY is kept as
+# an alias.
+option(LOUDIO_PLUGIN_TESTS_ONLY "Build only the DSP tests (skips JUCE and all plugin targets)" OFF)
+option(LOUDIO_REVERB_TESTS_ONLY "Alias of LOUDIO_PLUGIN_TESTS_ONLY" OFF)
+if(LOUDIO_REVERB_TESTS_ONLY)
+    set(LOUDIO_PLUGIN_TESTS_ONLY ON)
+endif()
 
-if(NOT LOUDIO_REVERB_TESTS_ONLY)
-add_subdirectory(JUCE)
+if(NOT LOUDIO_PLUGIN_TESTS_ONLY)
+# The JUCE submodule is shared by every plugin: VSTs/JUCE.
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../JUCE ${CMAKE_BINARY_DIR}/juce)
 
 juce_add_plugin(LoudioReverb
     PRODUCT_NAME "Loudio Reverb"
@@ -71,7 +78,7 @@ PUBLIC
 if(TARGET LoudioReverb_Standalone)
     target_link_libraries(LoudioReverb_Standalone PRIVATE juce::juce_audio_utils)
 endif()
-endif() # NOT LOUDIO_REVERB_TESTS_ONLY
+endif() # NOT LOUDIO_PLUGIN_TESTS_ONLY
 
 option(LOUDIO_REVERB_BUILD_TESTS "Build DSP unit tests executable" ON)
 if(LOUDIO_REVERB_BUILD_TESTS)
