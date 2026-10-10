@@ -47,12 +47,23 @@ public:
 
     /* modulationSamples is added to the (smoothed) base delay this sample. */
     float process(float in, float modulationSamples = 0.0f) {
-        float d = clampDelay(smoothedDelay.getNextValue() + modulationSamples);
-        /* Read before write: read(D) then returns x[n-D] (fraction toward x[n-D-1]). */
-        float out = line.read(d);
-        line.write(in + feedback.process(out));
+        float out = read(modulationSamples);
+        write(in);
         return out;
     }
+
+    /* process() in two halves, for a loop that filters or cross-feeds
+     * between the tap and the write (the Delay plugin, #142): read() takes
+     * the tap (and advances the time ramp), write() puts the next input in
+     * plus this block's feedback of the tap just read. Call them in that
+     * order, once each per sample. */
+    float read(float modulationSamples = 0.0f) {
+        float d = clampDelay(smoothedDelay.getNextValue() + modulationSamples);
+        /* Read before write: read(D) then returns x[n-D] (fraction toward x[n-D-1]). */
+        lastOut = line.read(d);
+        return lastOut;
+    }
+    void write(float in) { line.write(in + feedback.process(lastOut)); }
 
 private:
     float clampDelay(float d) const {
@@ -67,6 +78,7 @@ private:
     DelayLine line;
     SimpleSmoothedValue smoothedDelay;
     FeedbackPath feedback;
+    float lastOut = 0.0f;
 };
 
 } // namespace loudio
