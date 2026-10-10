@@ -63,6 +63,21 @@ static float mapWidgetValueToParam(int index, float widgetVal) {
     }
 }
 
+/*
+ * All-or-nothing UI -> DSP write (#107). cuif_spsc_write() does a partial
+ * write when the ring is short on room, which would splice half a
+ * ParamUpdateMessage into the stream and desync every later record. If
+ * there isn't room for `count` whole messages, drop the whole batch: the UI
+ * may lose an intermediate value as long as the final settled value gets
+ * through, and the UI thread must never block or spin on user input.
+ */
+static bool sendParamUpdates(LoudioReverbEditor* editor, const ParamUpdateMessage* msgs, size_t count) {
+    auto* rb = &editor->processorRef.uiToDspRingBuffer;
+    const size_t bytes = count * sizeof(ParamUpdateMessage);
+    if (cuif_spsc_writable(rb) < bytes) return false;
+    return cuif_spsc_write(rb, (const unsigned char*)msgs, bytes) == bytes;
+}
+
 static void knobChangedCallback(cuif_widget* w, float val) {
     if (!w || !w->parent) return;
     auto* editor = static_cast<LoudioReverbEditor*>(w->parent->user_data);
@@ -71,7 +86,7 @@ static void knobChangedCallback(cuif_widget* w, float val) {
     float mappedVal = mapWidgetValueToParam(paramIdx, val);
     
     ParamUpdateMessage msg = { paramIdx, mappedVal };
-    cuif_spsc_write(&editor->processorRef.uiToDspRingBuffer, (const unsigned char*)&msg, sizeof(ParamUpdateMessage));
+    sendParamUpdates(editor, &msg, 1);
 }
 
 static void dropdownChangedCallback(cuif_widget* w, float val) {
@@ -82,7 +97,7 @@ static void dropdownChangedCallback(cuif_widget* w, float val) {
     float mappedVal = mapWidgetValueToParam(paramIdx, val);
     
     ParamUpdateMessage msg = { paramIdx, mappedVal };
-    cuif_spsc_write(&editor->processorRef.uiToDspRingBuffer, (const unsigned char*)&msg, sizeof(ParamUpdateMessage));
+    sendParamUpdates(editor, &msg, 1);
 }
 
 static void themeChangedCallback(cuif_widget* w, float val) {
@@ -96,7 +111,7 @@ static void themeChangedCallback(cuif_widget* w, float val) {
 
     /* Persist through the same ring-buffer -> APVTS path every other parameter uses. */
     ParamUpdateMessage msg = { kParamUiTheme, (float)themeIndex };
-    cuif_spsc_write(&editor->processorRef.uiToDspRingBuffer, (const unsigned char*)&msg, sizeof(ParamUpdateMessage));
+    sendParamUpdates(editor, &msg, 1);
 }
 
 static void buttonClickedCallback(cuif_widget* w) {
@@ -108,7 +123,7 @@ static void buttonClickedCallback(cuif_widget* w) {
     float mappedVal = mapWidgetValueToParam(paramIdx, widgetVal);
     
     ParamUpdateMessage msg = { paramIdx, mappedVal };
-    cuif_spsc_write(&editor->processorRef.uiToDspRingBuffer, (const unsigned char*)&msg, sizeof(ParamUpdateMessage));
+    sendParamUpdates(editor, &msg, 1);
 }
 
 static void bezierChangedCallback(cuif_widget* w) {
@@ -128,9 +143,8 @@ static void bezierChangedCallback(cuif_widget* w) {
     ParamUpdateMessage msgMid = { kParamDecayMid, decayMid };
     ParamUpdateMessage msgHigh = { kParamDecayHigh, decayHigh };
 
-    cuif_spsc_write(&editor->processorRef.uiToDspRingBuffer, (const unsigned char*)&msgLow, sizeof(ParamUpdateMessage));
-    cuif_spsc_write(&editor->processorRef.uiToDspRingBuffer, (const unsigned char*)&msgMid, sizeof(ParamUpdateMessage));
-    cuif_spsc_write(&editor->processorRef.uiToDspRingBuffer, (const unsigned char*)&msgHigh, sizeof(ParamUpdateMessage));
+    const ParamUpdateMessage msgs[3] = { msgLow, msgMid, msgHigh };
+    sendParamUpdates(editor, msgs, 3);
 }
 
 LoudioReverbEditor::LoudioReverbEditor(LoudioReverbProcessor& p)
