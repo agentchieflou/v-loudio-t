@@ -26,6 +26,7 @@
 #include "loudio/dsp/ModulatedDelay.h"
 #include "loudio/dsp/AllPassStage.h"
 #include "loudio/dsp/Oversampler.h"
+#include "loudio/dsp/BiquadD.h"
 #include "loudio/plugin/ParamTable.h"
 #include "loudio/plugin/StateBlob.h"
 #include "loudio/plugin/ParamQueue.h"
@@ -1003,6 +1004,163 @@ void testOversampledTanhSuppressesAliasing() {
     std::cout << "  4x oversampled tanh: aliased 7th/9th harmonics below -60 dB (vs. > -50 dB without). Pass." << std::endl;
 }
 
+/* ------------------------------------------------------------------------
+ * loudio/dsp BiquadD (EQ-8 #136, spike §5.3)
+ * ---------------------------------------------------------------------- */
+
+/* Steady-state amplitude of a sine through a settled BiquadD, in dB,
+ * from the RMS over the second half second (a whole number of cycles for
+ * every frequency used below): peak-picking the samples of a 4 kHz sine
+ * at 48 kHz can miss the true peak by 0.3 dB, RMS can't. */
+static double measureBiquadDb(loudio::BiquadD& f, double hz, double fs) {
+    f.reset();
+    f.snapToTarget();
+    int n = (int)fs;
+    double sum = 0.0;
+    int count = 0;
+    for (int i = 0; i < n; ++i) {
+        double y = f.process(std::sin(2.0 * M_PI * hz * (double)i / fs));
+        if (i >= n / 2) { sum += y * y; ++count; }
+    }
+    double amplitude = std::sqrt(2.0 * sum / (double)count);
+    return 20.0 * std::log10(amplitude);
+}
+
+void testBiquadDMeasuredMagnitudeMatchesFormula() {
+    std::cout << "Running testBiquadDMeasuredMagnitudeMatchesFormula..." << std::endl;
+
+    const double fs = 48000.0;
+    loudio::BiquadD f;
+    f.prepare(fs);
+
+    /* The EQ-8 acceptance point: +6 dB bell at 1 kHz reads +6 dB at 1 kHz,
+     * and the analytic magnitudeDb() agrees with what the samples do. */
+    f.setTarget(loudio::BiquadD::Type::Bell, 1000.0, 1.0, 6.0);
+    assert(std::abs(f.magnitudeDb(1000.0) - 6.0) < 0.01);
+    assert(std::abs(measureBiquadDb(f, 1000.0, fs) - 6.0) < 0.1);
+    assert(std::abs(measureBiquadDb(f, 100.0, fs) - f.magnitudeDb(100.0)) < 0.1);
+    assert(std::abs(measureBiquadDb(f, 4000.0, fs) - f.magnitudeDb(4000.0)) < 0.1);
+    assert(f.magnitudeDb(20.0) < 0.1 && f.magnitudeDb(20000.0) < 0.1); /* a bell is local */
+
+    /* -12 dB bell with a narrow Q: deep at centre, back to 0 dB an octave away. */
+    f.setTarget(loudio::BiquadD::Type::Bell, 2000.0, 8.0, -12.0);
+    assert(std::abs(f.magnitudeDb(2000.0) + 12.0) < 0.01);
+    assert(std::abs(measureBiquadDb(f, 2000.0, fs) + 12.0) < 0.1);
+    assert(std::abs(f.magnitudeDb(1000.0)) < 0.3);
+
+    /* Shelves: gain at the extremes, half gain at the corner. */
+    f.setTarget(loudio::BiquadD::Type::LowShelf, 200.0, 0.7071, 9.0);
+    assert(std::abs(f.magnitudeDb(20.0) - 9.0) < 0.1);
+    assert(std::abs(f.magnitudeDb(200.0) - 4.5) < 0.2);
+    assert(std::abs(f.magnitudeDb(10000.0)) < 0.05);
+    assert(std::abs(measureBiquadDb(f, 30.0, fs) - f.magnitudeDb(30.0)) < 0.1);
+    f.setTarget(loudio::BiquadD::Type::HighShelf, 5000.0, 0.7071, -6.0);
+    assert(std::abs(f.magnitudeDb(20000.0) + 6.0) < 0.3);
+    assert(std::abs(f.magnitudeDb(5000.0) + 3.0) < 0.2);
+    assert(std::abs(f.magnitudeDb(100.0)) < 0.05);
+
+    /* HP / LP: -3 dB at the corner (Butterworth Q), 12 dB/oct beyond. */
+    f.setTarget(loudio::BiquadD::Type::HighPass, 100.0, 0.7071, 0.0);
+    assert(std::abs(f.magnitudeDb(100.0) + 3.01) < 0.05);
+    assert(std::abs(f.magnitudeDb(25.0) + 24.1) < 0.5);
+    assert(std::abs(measureBiquadDb(f, 100.0, fs) + 3.01) < 0.1);
+    f.setTarget(loudio::BiquadD::Type::LowPass, 8000.0, 0.7071, 0.0);
+    assert(std::abs(f.magnitudeDb(8000.0) + 3.01) < 0.05);
+    assert(f.magnitudeDb(100.0) > -0.01 && f.magnitudeDb(100.0) < 0.01);
+
+    /* Notch: deep null at centre, unity elsewhere. */
+    f.setTarget(loudio::BiquadD::Type::Notch, 1000.0, 4.0, 0.0);
+    assert(f.magnitudeDb(1000.0) < -60.0);
+    assert(measureBiquadDb(f, 1000.0, fs) < -40.0);
+    assert(std::abs(f.magnitudeDb(100.0)) < 0.05 && std::abs(f.magnitudeDb(10000.0)) < 0.05);
+
+    std::cout << "  Bell/shelf/HP/LP/notch: measured sine amplitudes match magnitudeDb() within 0.1 dB; +6 dB bell at 1 kHz is +6 dB. Pass." << std::endl;
+}
+
+void testBiquadDFlatCascadeIsExactPassthroughAndStableAtLowFrequency() {
+    std::cout << "Running testBiquadDFlatCascadeIsExactPassthroughAndStableAtLowFrequency..." << std::endl;
+
+    const double fs = 48000.0;
+    /* Eight bands at 0 dB (the EQ-8's default) must pass audio untouched:
+     * bells and shelves at 0 dB are the identity, a bypassed band too. */
+    loudio::BiquadD bands[8];
+    for (int i = 0; i < 8; ++i) {
+        bands[i].prepare(fs);
+        if (i == 0) bands[i].setTargetBypass();
+        else if (i == 7) bands[i].setTarget(loudio::BiquadD::Type::HighShelf, 8000.0, 0.7071, 0.0);
+        else bands[i].setTarget(loudio::BiquadD::Type::Bell, 100.0 * (double)(i + 1), 1.0, 0.0);
+    }
+    unsigned seed = 7;
+    double worst = 0.0;
+    for (int n = 0; n < 48000; ++n) {
+        seed = seed * 1664525u + 1013904223u;
+        double x = ((double)(seed >> 8) / 16777216.0) * 2.0 - 1.0;
+        double y = x;
+        for (auto& b : bands) y = b.process(y);
+        worst = std::max(worst, std::abs(y - x));
+    }
+    assert(worst < 1e-9); /* far better than the 0.01 dB the plugin test asks for */
+
+    /* A 20 Hz, Q 10, +12 dB bell at 96 kHz is the worst case for
+     * coefficient quantisation; in double it stays finite and bounded, and
+     * decays after the input stops (no limit cycle). */
+    loudio::BiquadD low;
+    low.prepare(96000.0);
+    low.setTarget(loudio::BiquadD::Type::Bell, 20.0, 10.0, 12.0);
+    double peak = 0.0;
+    for (int n = 0; n < 96000; ++n) {
+        double y = low.process(std::sin(2.0 * M_PI * 20.0 * (double)n / 96000.0));
+        assert(std::isfinite(y));
+        peak = std::max(peak, std::abs(y));
+    }
+    assert(peak < 5.0); /* +12 dB = 4x at most */
+    /* The pole Q of a +12 dB, Q 10 bell is ~40 (tau ~0.64 s), so the
+     * ring-out is slow but must keep shrinking: each 4 s window at least
+     * 100x below the previous one, never a limit cycle. */
+    double windows[3];
+    for (int w = 0; w < 3; ++w) {
+        double tail = 0.0;
+        for (int n = 0; n < 96000 * 4; ++n) {
+            double y = low.process(0.0);
+            assert(std::isfinite(y));
+            tail = std::max(tail, std::abs(y));
+        }
+        windows[w] = tail;
+    }
+    assert(windows[1] < windows[0] * 0.01);
+    assert(windows[2] < windows[1] * 0.01);
+    assert(windows[2] < 1e-6);
+
+    std::cout << "  Eight 0 dB bands are a 1e-9 passthrough; a 20 Hz Q10 +12 dB bell at 96 kHz stays bounded and decays. Pass." << std::endl;
+}
+
+void testBiquadDCoefficientRampIsClickFree() {
+    std::cout << "Running testBiquadDCoefficientRampIsClickFree..." << std::endl;
+
+    const double fs = 48000.0;
+    loudio::BiquadD f;
+    f.prepare(fs, 0.005);
+    f.setTarget(loudio::BiquadD::Type::Bell, 1000.0, 1.0, 0.0);
+    /* Feed a 100 Hz sine (far from the band) and jump the band to +12 dB
+     * at 1 kHz: the output must move smoothly -- no sample-to-sample step
+     * larger than the sine's own slope allows. */
+    double prev = 0.0, maxStep = 0.0;
+    const double slope = 2.0 * M_PI * 100.0 / fs * 1.1; /* max step of a unit 100 Hz sine, +10% */
+    for (int n = 0; n < 48000; ++n) {
+        if (n == 24000) f.setTarget(loudio::BiquadD::Type::Bell, 1000.0, 1.0, 12.0);
+        double y = f.process(std::sin(2.0 * M_PI * 100.0 * (double)n / fs));
+        if (n > 0) maxStep = std::max(maxStep, std::abs(y - prev));
+        prev = y;
+    }
+    assert(maxStep < slope * 1.5);
+    /* And the ramp does settle on the exact target. */
+    assert(std::abs(f.magnitudeDb(1000.0) - 12.0) < 0.01);
+    double settled = measureBiquadDb(f, 1000.0, fs);
+    assert(std::abs(settled - 12.0) < 0.1);
+
+    std::cout << "  A +12 dB jump ramps over 5 ms with no step larger than the signal's own slope, and settles exactly. Pass." << std::endl;
+}
+
 int main() {
     std::cout << "==============================" << std::endl;
     std::cout << "Starting Loudio DSP component tests" << std::endl;
@@ -1027,6 +1185,9 @@ int main() {
     testAllPassUnityMagnitudeAndPhaser();
     testModulatedDelayMatchesPlainDelayAndFeedsBack();
     testFeedbackPathStaysBounded();
+    testBiquadDMeasuredMagnitudeMatchesFormula();
+    testBiquadDFlatCascadeIsExactPassthroughAndStableAtLowFrequency();
+    testBiquadDCoefficientRampIsClickFree();
     testTransportDivisionHelpers();
     testOversamplerRoundTripNullsInPassband();
     testOversamplerReportedLatencyMatchesImpulse();
