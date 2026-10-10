@@ -3,7 +3,8 @@
  * (DSP/include/loudio/testing/CoreTests.h) plus the Gate's own: a burst
  * opens within the attack time and closes after hold + release, a level
  * toggling +-1 dB around the threshold never chatters with hysteresis,
- * range -20 dB leaves exactly -20 dB when closed, latency == lookahead,
+ * range -20 dB leaves exactly -20 dB when closed, latency fixed at the
+ * maximum lookahead,
  * the sidechain high-pass, and golden impulse responses.
  *
  *   dsp_tests                 run everything
@@ -69,6 +70,9 @@ GateCore makeGate(float thresholdDb, float hysteresisDb, float attackMs, float h
     core.setParameterValueDirect(kGateAttack, attackMs);
     core.setParameterValueDirect(kGateHold, holdMs);
     core.setParameterValueDirect(kGateRelease, releaseMs);
+    /* Maximum lookahead: the sidechain delay is then 0 and the gain trace
+     * reads in input time (the audio comes out 10 ms later). */
+    core.setParameterValueDirect(kGateLookahead, kGateMaxLookaheadMs);
     core.prepare(kFs, 48);
     return core;
 }
@@ -136,19 +140,16 @@ void testGateRangeFloor() {
     core.prepare(kFs, 48);
     std::vector<float> l(48), r(48);
     double amp = std::pow(10.0, -60.0 / 20.0);
+    auto input = [&](long long n) { return (float)(amp * std::sin(2.0 * M_PI * 1000.0 * (double)n / kFs)); };
     float worst = 0.0f;
-    int n = 0;
+    long long n = 0;
+    const int latency = core.latencySamples();
     for (int b = 0; b < 500; ++b) {
-        std::vector<float> in(48);
-        for (int i = 0; i < 48; ++i) {
-            in[(size_t)i] = (float)(amp * std::sin(2.0 * M_PI * 1000.0 * (double)n / kFs));
-            l[(size_t)i] = r[(size_t)i] = in[(size_t)i];
-            ++n;
-        }
+        for (int i = 0; i < 48; ++i) { l[(size_t)i] = r[(size_t)i] = input(n); ++n; }
         core.process(l.data(), r.data(), 48);
-        if (b >= 400) for (int i = 0; i < 48; ++i) worst = std::max(worst, std::abs(l[(size_t)i] - 0.1f * in[(size_t)i]));
+        if (b >= 400) for (int i = 0; i < 48; ++i) worst = std::max(worst, std::abs(l[(size_t)i] - 0.1f * input(n - 48 + i - latency)));
     }
-    assert(worst < 1e-7f); /* 0.1 x input, to float precision */
+    assert(worst < 1e-7f); /* 0.1 x the (latency-delayed) input, to float precision */
     assert(std::abs(core.meterGainReductionDb() - 20.0f) < 0.01f);
 
     /* Full range: silence. */
@@ -161,14 +162,16 @@ void testGateRangeFloor() {
     std::cout << "  Range -20 dB leaves exactly -20 dB when closed; -80 dB is silence. Pass." << std::endl;
 }
 
-void testGateLatencyIsLookahead() {
-    std::cout << "Running testGateLatencyIsLookahead..." << std::endl;
+void testGateLatencyIsFixedMaximum() {
+    std::cout << "Running testGateLatencyIsFixedMaximum..." << std::endl;
+    /* lpi.latency.v1: fixed for an activation. The core always reports
+     * (and delays by) the maximum lookahead, 480 samples at 48 kHz. */
     GateCore core;
     core.setParameterValueDirect(kGateLookahead, 5.0f);
     core.setParameterValueDirect(kGateThreshold, -80.0f); /* always open */
     core.setParameterValueDirect(kGateAttack, 0.01f);
     core.prepare(kFs, 512);
-    assert(core.latencySamples() == 240);
+    assert(core.latencySamples() == 480);
 
     /* Let it open on a steady signal, then send an impulse. */
     std::vector<float> l(512, 0.01f), r(512, 0.01f);
@@ -178,17 +181,19 @@ void testGateLatencyIsLookahead() {
     l[0] = 1.0f; r[0] = -1.0f;
     core.process(l.data(), r.data(), 512);
     for (int i = 0; i < 512; ++i) {
-        float expectL = i == 240 ? 1.0f : 0.01f;
+        float expectL = i == 480 ? 1.0f : 0.01f;
         assert(std::abs(l[(size_t)i] - expectL) < 1e-5f);
     }
-    assert(std::abs(r[240] + 1.0f) < 1e-5f);
+    assert(std::abs(r[480] + 1.0f) < 1e-5f);
 
+    /* The parameter changes the detector's head start, not the latency. */
     assert(core.setParameterValue(kGateLookahead, 0.0f));
     core.process(l.data(), r.data(), 512);
-    assert(core.latencySamples() == 0);
+    assert(core.latencySamples() == 480);
 
     /* Lookahead earns its name: with 5 ms lookahead and a 5 ms attack, a
-     * burst's first sample is already half open at the output. */
+     * burst's first sample is already half open at the output; with 0 ms
+     * the gate only starts opening as the burst arrives. */
     auto firstSample = [](float lookaheadMs) {
         GateCore c = makeGate(-40.0f, 6.0f, 5.0f, 50.0f, 100.0f);
         c.setParameterValueDirect(kGateLookahead, lookaheadMs);
@@ -201,7 +206,7 @@ void testGateLatencyIsLookahead() {
     assert(firstSample(0.0f) < 0.01f);  /* the first sample is still shut */
     assert(firstSample(5.0f) > 0.3f);   /* with lookahead it arrives mostly open */
 
-    std::cout << "  latencySamples() == lookahead samples, audio delayed by exactly that, transients arrive open. Pass." << std::endl;
+    std::cout << "  latencySamples() is the fixed 10 ms maximum, audio delayed by exactly that, the lookahead parameter still opens early. Pass." << std::endl;
 }
 
 void testGateSidechainHpf() {
@@ -254,7 +259,7 @@ int main(int argc, char** argv) {
     testGateBurstOpensAndCloses();
     testGateHysteresisPreventsChatter();
     testGateRangeFloor();
-    testGateLatencyIsLookahead();
+    testGateLatencyIsFixedMaximum();
     testGateSidechainHpf();
     testImpulseResponseMatchesGolden<GateCore>(LOUDIO_GATE_GOLDEN_DIR, kGoldenVariants, kGoldenVariantCount, kGoldenIrLength, kGoldenSampleRate);
 

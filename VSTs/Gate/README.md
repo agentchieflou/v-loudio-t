@@ -20,8 +20,10 @@ detector (near-instant attack, 5 ms release) on max(|L|, |R|), a
 hysteresis switch (open above `Threshold`, close below `Threshold −
 Hysteresis`), a `Hold` timer that defers closing (and restarts on any
 re-open), then a linear one-pole gain toward 1 (`Attack`) or the
-`Range` floor (`Release`), applied to the input delayed by `Lookahead`.
-The lookahead is the reported latency.
+`Range` floor (`Release`), applied to the delayed input. The audio is
+always delayed by the maximum lookahead (10 ms) and the detector level by
+the difference, so the gate opens `Lookahead` ms early while the reported
+latency stays fixed for the life of an activation (the LPI contract).
 
 ## Parameters
 
@@ -51,8 +53,8 @@ time, stays open through the hold and reaches 37% one release after the
 hold (plus the detector's 20 dB decay); ±1 dB around the threshold gives
 one transition with 6 dB hysteresis and chatter with none; range −20 dB
 leaves exactly 0.1 × input when closed and −80 dB is silence;
-`latencySamples()` == lookahead samples with the audio delayed by that
-and a transient arriving already open; the sidechain HPF keeps 30 Hz
+`latencySamples()` is the fixed 10 ms maximum with the audio delayed by
+that and, with lookahead set, a transient arriving already open; the sidechain HPF keeps 30 Hz
 rumble from opening the gate; golden IRs `default` and `expander`.
 
 Build (Windows, from the repo root):

@@ -40,10 +40,12 @@ gate opens and closes both channels together.
 6. **Range**: the closed floor in dB. −80 dB is effectively silence;
    −20 dB leaves exactly −20 dB of the signal and makes the gate a
    downward expander with a fixed depth.
-7. **Lookahead** (`loudio::Lookahead`): the audio path is delayed by
-   `lookahead` ms so the gate is already opening when the transient
-   arrives; reported as the plugin's latency (`lpi.latency.v1` /
-   `setLatencySamples`).
+7. **Lookahead** (`loudio::Lookahead`): the audio path is always delayed
+   by the maximum lookahead (10 ms) and the detector level by
+   `10 ms − lookahead`, so the gate is already opening when the
+   transient arrives while the reported latency (`lpi.latency.v1` /
+   `setLatencySamples`) stays fixed for the life of an activation, as
+   the LPI header requires.
 
 ## 3. Parameters
 
@@ -68,7 +70,7 @@ gate opens and closes both channels together.
   state change at all with 6 dB of hysteresis (and chatters with 0).
 - Range −20 dB: a steady signal below the threshold comes out at
   exactly −20 dB relative to the input once settled.
-- `latencySamples()` == lookahead samples; the audio is delayed by that.
+- `latencySamples()` is the fixed maximum; the audio is delayed by that.
 
 ## 5. Out of scope for v1
 

@@ -32,6 +32,9 @@ void GateCore::prepare(double newSampleRate, int /* maxBlockSize */) {
     const int maxLookahead = lookaheadSamplesFor(kGateMaxLookaheadMs);
     lookaheadL.prepare(maxLookahead);
     lookaheadR.prepare(maxLookahead);
+    lookaheadL.setDelaySamples(maxLookahead);
+    lookaheadR.setDelaySamples(maxLookahead);
+    sidechainDelay.prepare(maxLookahead);
     holdCounter = 0;
     open = false;
     inputDb = -100.0f;
@@ -58,8 +61,7 @@ void GateCore::applyParams() {
     }
     if (params[kGateLookahead] != applied[kGateLookahead]) {
         int n = lookaheadSamplesFor(params[kGateLookahead]);
-        lookaheadL.setDelaySamples(n);
-        lookaheadR.setDelaySamples(n);
+        sidechainDelay.setDelaySamples(lookaheadSamplesFor(kGateMaxLookaheadMs) - n);
     }
     for (int i = 0; i < kGateNumParams; ++i) applied[i] = params[i];
 }
@@ -77,7 +79,9 @@ void GateCore::process(float* left, float* right, int numSamples) {
 
         float sl = l, sr = r;
         if (scHpf > 0.0f) { sl = scHpfL.process(l); sr = scHpfR.process(r); }
-        const float levelDb = detector.processDb(std::max(std::abs(sl), std::abs(sr)));
+        /* Linear level through the sidechain delay (its zeros are silence),
+         * then dB. */
+        const float levelDb = loudio::gainToDb(sidechainDelay.process(detector.process(std::max(std::abs(sl), std::abs(sr)))));
 
         /* Open/close decision with hysteresis; closing is deferred by the hold. */
         if (hysteresis.process(levelDb)) {

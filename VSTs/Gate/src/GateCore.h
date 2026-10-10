@@ -21,9 +21,13 @@
  *               re-opening restarts it;
  *   gain      = linear one-pole toward 1 (open, attack) or toward the
  *               range floor (closed after the hold, release);
- *   out       = input delayed by the lookahead, times gain.
+ *   out       = delayed input, times gain.
  *
- * latencySamples() is the lookahead; both wrappers report it.
+ * Latency is FIXED at the maximum lookahead (10 ms), whatever the
+ * parameter says: lpi.latency.v1 promises a latency that does not change
+ * for the life of an activation. The audio is always delayed by that
+ * maximum; a shorter lookahead delays the detector level by the
+ * difference instead, so the gate still opens `lookahead` ms early.
  */
 class GateCore {
 public:
@@ -70,7 +74,8 @@ private:
     loudio::SidechainHpf scHpfL, scHpfR;
     loudio::LevelDetector detector;
     loudio::Hysteresis hysteresis;
-    loudio::Lookahead lookaheadL, lookaheadR;
+    loudio::Lookahead lookaheadL, lookaheadR; /* audio, fixed at the maximum */
+    loudio::Lookahead sidechainDelay;         /* detector level, maximum - lookahead */
 
     float aAttack = 0.0f, aRelease = 0.0f;
     float floorGain = 0.0f;
