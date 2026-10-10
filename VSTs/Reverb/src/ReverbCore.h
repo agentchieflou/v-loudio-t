@@ -1,14 +1,14 @@
 #pragma once
 
-#include "DelayLine.h"
-#include "AllPassDiffuser.h"
-#include "EarlyReflections.h"
-#include "OnePoleLPF.h"
-#include "Crossover.h"
-#include "EnvelopeDetector.h"
-#include "SimpleBiquad.h"
-#include "SimpleSmoothedValue.h"
-#include "FFTAnalyzer.h"
+#include "loudio/dsp/DelayLine.h"
+#include "loudio/dsp/AllPassDiffuser.h"
+#include "loudio/dsp/EarlyReflections.h"
+#include "loudio/dsp/OnePoleLPF.h"
+#include "loudio/dsp/Crossover.h"
+#include "loudio/dsp/EnvelopeDetector.h"
+#include "loudio/dsp/SimpleBiquad.h"
+#include "loudio/dsp/SimpleSmoothedValue.h"
+#include "loudio/dsp/FFTAnalyzer.h"
 #include "SharedStructures.h"
 #include "cuif/ring_buffer.h"
 

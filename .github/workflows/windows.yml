@@ -50,6 +50,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Configure DSP library
+        run: cmake -S DSP -B build/dsp
+      - name: Build DSP tests
+        run: cmake --build build/dsp --config Debug
+      - name: loudio_dsp_tests
+        working-directory: build/dsp/Debug
+        run: ./loudio_dsp_tests.exe
       - name: Configure
         run: cmake -S PluginABI -B build/abi
       - name: Build
@@ -102,3 +109,23 @@ jobs:
           if-no-files-found: ignore
       - name: Build VST3 + Standalone
         run: cmake --build build/reverb --config Debug --target LoudioReverb_VST3 LoudioReverb_Standalone
+
+  # Fast, GPU-free, JUCE-free DSP feedback: the shared DSP component tests
+  # and the Reverb DSP tests (which need neither Windows nor JUCE) in ~30 s.
+  dsp-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure DSP library
+        run: cmake -S DSP -B build/dsp -DCMAKE_BUILD_TYPE=Debug
+      - name: Build DSP tests
+        run: cmake --build build/dsp
+      - name: loudio_dsp_tests
+        run: ./build/dsp/loudio_dsp_tests
+      - name: Configure Reverb DSP tests (no JUCE)
+        run: cmake -S VSTs/Reverb -B build/reverb-tests -DCMAKE_BUILD_TYPE=Debug -DLOUDIO_REVERB_TESTS_ONLY=ON
+      - name: Build dsp_tests
+        run: cmake --build build/reverb-tests --target dsp_tests
+      - name: dsp_tests
+        run: ./build/reverb-tests/dsp_tests
