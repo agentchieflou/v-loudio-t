@@ -1,6 +1,10 @@
 #pragma once
 #include <cmath>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 /*
  * JUCE-free biquad replacing juce::dsp::IIR::Filter<float> +
  * juce::dsp::IIR::Coefficients<float>::makeLowShelf/makePeakFilter/
@@ -63,6 +67,33 @@ public:
 
         setNormalizedCoefficients(rawB0, rawB1, rawB2, rawA0, rawA1, rawA2);
     }
+
+    /* RBJ low-pass / high-pass / notch (P6, #132): the sidechain HPF, EQ-8's
+     * LP/HP/notch bands and the oversampler's test fixtures. */
+    void makeLowPass(double sampleRate, float freqHz, float q) {
+        float w0 = 2.0f * (float)M_PI * freqHz / (float)sampleRate;
+        float cosw0 = cosf(w0);
+        float alpha = sinf(w0) / (2.0f * q);
+        setNormalizedCoefficients((1.0f - cosw0) * 0.5f, 1.0f - cosw0, (1.0f - cosw0) * 0.5f,
+                                  1.0f + alpha, -2.0f * cosw0, 1.0f - alpha);
+    }
+
+    void makeHighPass(double sampleRate, float freqHz, float q) {
+        float w0 = 2.0f * (float)M_PI * freqHz / (float)sampleRate;
+        float cosw0 = cosf(w0);
+        float alpha = sinf(w0) / (2.0f * q);
+        setNormalizedCoefficients((1.0f + cosw0) * 0.5f, -(1.0f + cosw0), (1.0f + cosw0) * 0.5f,
+                                  1.0f + alpha, -2.0f * cosw0, 1.0f - alpha);
+    }
+
+    void makeNotch(double sampleRate, float freqHz, float q) {
+        float w0 = 2.0f * (float)M_PI * freqHz / (float)sampleRate;
+        float cosw0 = cosf(w0);
+        float alpha = sinf(w0) / (2.0f * q);
+        setNormalizedCoefficients(1.0f, -2.0f * cosw0, 1.0f, 1.0f + alpha, -2.0f * cosw0, 1.0f - alpha);
+    }
+
+    void reset() { x1 = x2 = y1 = y2 = 0.0f; }
 
     float processSample(float x) {
         float y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
