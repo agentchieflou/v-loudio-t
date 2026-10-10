@@ -6,7 +6,7 @@
  * Pure layout computation for the Reverb panel -- no JUCE dependency, so it
  * can be unit-tested headlessly from DSPTests.cpp (no-overlap, in-bounds
  * assertions) instead of only being checkable by eye in a screenshot. This
- * is what PluginEditor.cpp's ensureCuifWindowCreated() calls to get widget
+ * is what ReverbUi.cpp's reverbUiCreate() uses to get widget
  * rects, rather than hardcoding coordinates inline (which is how the
  * overlapping-analyzers bug, #64, happened in the first place).
  */

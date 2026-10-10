@@ -6,7 +6,7 @@
 
 /*
  * The Reverb editor's widget tree, built once here and shared by both
- * editors: the VST3/JUCE editor (PluginEditor.cpp, native child window) and
+ * editors: the VST3/JUCE editor (VSTs/common/LoudioEditor.h, native child window) and
  * the LPI wrapper's offscreen editor (lpi_reverb.cpp). JUCE-free.
  *
  * The UI never writes parameters itself. Every edit goes out through

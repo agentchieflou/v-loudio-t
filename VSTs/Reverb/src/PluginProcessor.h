@@ -1,79 +1,70 @@
 #pragma once
 
-#include <JuceHeader.h>
+#include "LoudioEditor.h" /* VSTs/common: LoudioProcessor + LoudioEditor templates (#129) */
 #include "ReverbCore.h"
-#include "cuif/ring_buffer.h"
-#include "SharedStructures.h"
+#include "ReverbUi.h"
 
 /*
- * Thin JUCE/VST3-facing wrapper (#100/B3) around ReverbCore, the actual
- * JUCE-free DSP engine. This class's job is exactly two bridges:
+ * The Reverb's VST3/Standalone build on the shared JUCE wrapper
+ * (VSTs/common). Everything format-specific -- the APVTS layout from
+ * kReverbParams, the UI<->DSP rings, the cuif child window, DPI debounce --
+ * lives in the templates; this is only what makes it the Reverb.
  *
- *   1. APVTS <-> ReverbCore parameter sync, each block: drain UI-driven
- *      ring-buffer messages into APVTS (unchanged from before extraction,
- *      keeps the host's own automation-lane/generic-UI view of every
- *      parameter correct), then push every current APVTS value into
- *      ReverbCore via setParameterValueDirect() (same-thread, no queue --
- *      see ReverbCore.h's header comment for why this is safe).
- *   2. ReverbCore's analyzer-magnitude output -> dspToUiRingBuffer, exactly
- *      like before extraction, so PluginEditor.cpp's reading side is
- *      completely unchanged.
- *
- * getStateInformation/setStateInformation still serialize APVTS's own XML
- * state exactly as before -- this preserves existing .vstpreset/DAW-session
- * compatibility. ReverbCore has its own separate, JUCE-free getState/
- * setState (a small binary blob) for a future host-agnostic (LPI) wrapper
- * with no APVTS-equivalent preset mechanism at all; this class doesn't use
- * it.
+ * The APVTS XML preset shape is unchanged from the hand-written wrapper:
+ * same ids, names, parameter types (Bool for freeze, Choice for mode and
+ * uiTheme with the same labels, Float with the same ranges and steps) and
+ * the same order, all of which now come from the table.
  */
-class LoudioReverbProcessor : public juce::AudioProcessor {
-public:
-    LoudioReverbProcessor();
-    ~LoudioReverbProcessor() override = default;
+struct ReverbVstTraits {
+    using Core = ReverbCore;
+    using Ui = ReverbUi;
 
-    void prepareToPlay(double sampleRate, int samplesPerBlock) override;
-    void releaseResources() override;
-    bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
-    void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    static constexpr int kPanelWidth = 800;
+    static constexpr int kPanelHeight = 600;
+    static constexpr const char* kWindowTitle = "Reverb Panel";
 
-    juce::AudioProcessorEditor* createEditor() override;
-    bool hasEditor() const override { return true; }
+    static juce::StringArray choiceLabels(int index) {
+        if (index == kParamMode) return { "Room", "Hall", "Plate", "Cathedral", "Spring" };
+        if (index == kParamUiTheme) return { "Default", "Hello Kitty", "Greens" }; /* cosmetic, persisted like any other setting (#68) */
+        return {};
+    }
 
-    const juce::String getName() const override { return JucePlugin_Name; }
-    bool acceptsMidi() const override { return false; }
-    bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    static Ui* uiCreate(float w, float h, void* context, loudio::vst::SendParamsFn sendParams) {
+        return reverbUiCreate(w, h, { context, sendParams });
+    }
+    static void uiDestroy(Ui* ui) { reverbUiDestroy(ui); }
+    static cuif_widget* uiRoot(Ui* ui) { return ui->root; }
+    static void uiSyncFromParams(Ui* ui, const float* params) { reverbUiSyncFromParams(ui, params); }
 
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram(int) override {}
-    const juce::String getProgramName(int) override { return {}; }
-    void changeProgramName(int, const juce::String&) override {}
+    /* Analyzer frames, audio thread -> UI. If a host's block is large
+     * enough for the 1024-sample FFT to complete more than once per block
+     * (offline bounce), only the last completion is pushed; cosmetic only. */
+    static void afterProcess(Core& core, cuif_spsc_ring_buffer& dspToUi) {
+        float magnitudes[64];
+        if (core.isLeftAnalyzerFrameDirty()) {
+            core.getLeftAnalyzerMagnitudes(magnitudes);
+            loudio::vst::pushFrame(dspToUi, 'L', magnitudes);
+        }
+        if (core.isRightAnalyzerFrameDirty()) {
+            core.getRightAnalyzerMagnitudes(magnitudes);
+            loudio::vst::pushFrame(dspToUi, 'R', magnitudes);
+        }
+    }
 
-    void getStateInformation(juce::MemoryBlock&) override;
-    void setStateInformation(const void*, int) override;
-
-    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
-    juce::AudioProcessorValueTreeState apvts;
-
-    /* Shared SPSC lock-free ring buffers for DSP <-> UI communications --
-     * unchanged in shape and ownership from before extraction; only the
-     * DSP math that fills/drains them moved into ReverbCore. */
-    cuif_spsc_ring_buffer dspToUiRingBuffer;
-    cuif_spsc_ring_buffer uiToDspRingBuffer;
-
-private:
-    ReverbCore core;
-
-    /* std::atomic<float>* for every parameter, resolved once in the
-     * constructor. apvts.getRawParameterValue(id) is a string-keyed lookup
-     * that builds a juce::String from the id -- a heap allocation -- so it
-     * must never be called from processBlock() (#47). */
-    std::atomic<float>* rawParamValues[kNumParams] = {};
-
-    /* Pre-allocated storage for ring buffers (1024 bytes is ample for FIFO data) */
-    unsigned char dspToUiStorage[1024];
-    unsigned char uiToDspStorage[1024];
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LoudioReverbProcessor)
+    static void pollDspToUi(Ui* ui, cuif_spsc_ring_buffer& fromDsp) {
+        unsigned char tag;
+        while (cuif_spsc_readable(&fromDsp) >= sizeof(tag) + sizeof(ui->leftSpectrum)) {
+            if (cuif_spsc_read(&fromDsp, &tag, sizeof(tag)) != sizeof(tag)) break;
+            float* dst = tag == 'L' ? ui->leftSpectrum : (tag == 'R' ? ui->rightSpectrum : nullptr);
+            if (dst) {
+                cuif_spsc_read(&fromDsp, (unsigned char*)dst, sizeof(ui->leftSpectrum));
+            } else {
+                float discard[64];
+                cuif_spsc_read(&fromDsp, (unsigned char*)discard, sizeof(discard));
+            }
+        }
+    }
 };
+
+using LoudioReverbProcessor = loudio::vst::LoudioProcessor<ReverbVstTraits>;
+using LoudioReverbEditor = loudio::vst::LoudioEditor<ReverbVstTraits>;
