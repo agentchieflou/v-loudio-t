@@ -77,7 +77,12 @@ public:
     ~LoudioProcessor() override = default;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override {
+        /* Current values first so prepare() sizes anything that depends on
+         * a parameter (a lookahead, a delay range) for what is set now. */
+        const int count = core.getParameterCount();
+        for (int i = 0; i < count; ++i) core.setParameterValueDirect(i, *rawParamValues[(size_t)i]);
         core.prepare(sampleRate, samplesPerBlock);
+        reportLatency();
     }
 
     void releaseResources() override {}
@@ -128,9 +133,20 @@ public:
         }
 
         core.process(buffer.getWritePointer(0), buffer.getWritePointer(1), buffer.getNumSamples());
+        reportLatency();
 
         /* C. Core -> UI. */
         Traits::afterProcess(core, dspToUiRingBuffer);
+    }
+
+    /* Latency (#137): a core with latencySamples() (CORE_CONTRACT.md)
+     * has it reported through setLatencySamples, at prepare and whenever
+     * it changes (a lookahead parameter). JUCE only notifies the host
+     * when the value differs, so the per-block call is a compare. */
+    void reportLatency() {
+        if constexpr (requires (const Core& c) { c.latencySamples(); }) {
+            setLatencySamples(core.latencySamples());
+        }
     }
 
     juce::AudioProcessorEditor* createEditor() override; /* defined in LoudioEditor.h */
