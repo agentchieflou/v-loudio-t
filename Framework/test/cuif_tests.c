@@ -194,8 +194,12 @@ static void testMeterBallisticsRiseInstantlyFallAtRateAndHoldPeak(void) {
     assert(m->u.meter.peak_db == 0.0f); /* still held */
     cuif_widget_meter_feed(m, -3.0f);
     cuif_widget_meter_feed(m, -60.0f);
-    cuif_widget_meter_step(m, 1.4f);
-    assert(m->u.meter.peak_db == 0.0f); /* the -3 dB feed didn't restart the hold (0 dB peak stands) */
+    cuif_widget_meter_step(m, 0.4f);
+    assert(m->u.meter.peak_db == 0.0f); /* 1.4 s: still held; the -3 dB feed was not a new peak, so it did not restart the hold */
+    cuif_widget_meter_step(m, 1.0f);
+    assert(m->u.meter.peak_db < 0.0f && m->u.meter.peak_db > -60.0f); /* 2.4 s: hold expired, the peak is falling */
+    cuif_widget_meter_feed(m, -2.0f);
+    assert(m->u.meter.peak_db == -2.0f && m->u.meter.peak_age_ms == 0.0f); /* a feed above the fallen peak is a new peak and restarts the hold */
 
     /* Horizontal and gain-reduction variants construct too. */
     cuif_widget* gr = cuif_widget_create_meter(0.0f, 0.0f, 200.0f, 20.0f, -30.0f, 0.0f, false);
