@@ -38,7 +38,7 @@ Ordered by dependency. P1–P4 are prerequisites for any new plugin; P5–P9 are
 | **P6** | Dynamics DSP in `loudio_dsp`: peak/RMS detector with attack/release/hold (extend `EnvelopeDetector`), soft-knee gain computer (dB domain), lookahead (on `DelayLine`), sidechain HPF (on `SimpleBiquad`), dB↔linear helpers, hysteresis gate stage | Compressor, Gate, Limiter, Glue, De-esser all share these |
 | **P7** | Modulation DSP: LFO (sine/tri/saw/S&H, phase offset per channel, free-running or tempo-synced), modulated fractional delay (on `DelayLine::read(float)`), first-order all-pass section + N-stage chain, feedback path with soft clip | Delay, Flanger, Chorus, Phaser, Tremolo |
 | **P8** | Oversampling: 2×/4× polyphase (half-band IIR or FIR), JUCE-free so the LPI build has it too; latency reported through `lpi.latency.v1` | Glue and Limiter saturation, Saturator. The blueprints assumed `juce::dsp::Oversampling`, which the LPI path cannot use. |
-| **P9** | `lpi.transport.v1` extension (tempo, PPQ position, playing flag) | Tempo-synced Delay and LFO rates. noprod said transport is "not needed for B5/B6" — it becomes needed with the Delay; raise it with them before building. |
+| **P9** | `lpi.transport.v1` extension (tempo, PPQ position, playing/looping flags), `loudio::TransportInfo` mirror + division helpers, detected `Core::setTransport` in both wrappers | Tempo-synced Delay and LFO rates. Shape agreed with the GhostDAW session (#135): it fills tempo/PLAYING/ppq for browser tracks, tempo-only for Strudel buses; plugins keep a free-running fallback. |
 
 ## 3. Plugin catalogue
 

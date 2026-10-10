@@ -203,6 +203,31 @@ int main(int argc, char** argv) {
         EXPECT(changes->get_parameter_changes(inst, NULL, 16) == 0, "NULL out buffer writes nothing");
     }
 
+    const lpi_transport_v1* transport = (const lpi_transport_v1*)api->get_extension(inst, LPI_EXT_TRANSPORT_V1);
+    if (transport) {
+        printf("  %s: present\n", LPI_EXT_TRANSPORT_V1);
+        EXPECT(transport->set_transport != NULL, "transport set_transport present");
+        if (transport->set_transport) {
+            /* Playing with a full position, stopped with a stale position,
+             * tempo-only, and nothing valid: all must be accepted and leave
+             * process() finite. */
+            lpi_transport_info ti[4] = {
+                { 120.0, 16.0, kSampleRate, LPI_TRANSPORT_PLAYING | LPI_TRANSPORT_TEMPO_VALID | LPI_TRANSPORT_PPQ_VALID },
+                { 120.0, 16.0, kSampleRate, LPI_TRANSPORT_TEMPO_VALID | LPI_TRANSPORT_PPQ_VALID },
+                { 93.5,  0.0,  kSampleRate, LPI_TRANSPORT_PLAYING | LPI_TRANSPORT_TEMPO_VALID },
+                { 0.0,   0.0,  kSampleRate, 0 },
+            };
+            for (int t = 0; t < 4; ++t) {
+                for (int blk = 0; blk < 4; ++blk) {
+                    ti[t].ppq_position += (ti[t].flags & LPI_TRANSPORT_PLAYING) ? 64.0 / kSampleRate * ti[t].tempo_bpm / 60.0 : 0.0;
+                    transport->set_transport(inst, &ti[t]);
+                    runBlock(api, inst, info, b, 64, &seed);
+                    EXPECT(outputsFinite(info, b, 64), "output finite after set_transport (case %d, block %d)", t, blk);
+                }
+            }
+        }
+    }
+
     const lpi_gui_offscreen_v1* gui = (const lpi_gui_offscreen_v1*)api->get_extension(inst, LPI_EXT_GUI_OFFSCREEN_V1);
     if (gui) {
         printf("  %s: present\n", LPI_EXT_GUI_OFFSCREEN_V1);
