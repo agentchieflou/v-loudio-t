@@ -3,7 +3,7 @@
  * (DSP/include/loudio/testing/CoreTests.h) plus the Compressor's own:
  * static ratio (-20 dBFS sine, threshold -30, 4:1 -> -27.5 dBFS within
  * 0.05 dB), the soft knee, attack/release reaching 63% in one time
- * constant, latency == lookahead samples (and the audio really delayed by
+ * constant, latency fixed at the maximum lookahead (and the audio really delayed by
  * that), mix 0 nulling against the input, RMS detection, auto makeup, the
  * sidechain high-pass, and golden impulse responses.
  *
@@ -64,6 +64,9 @@ CompressorCore makeStatic(float thresholdDb, float ratio, float kneeDb = 0.0f) {
     core.setParameterValueDirect(kCompressorKnee, kneeDb);
     core.setParameterValueDirect(kCompressorAttack, 1.0f);
     core.setParameterValueDirect(kCompressorRelease, 100.0f);
+    /* Maximum lookahead: the sidechain delay is then 0, so gain traces
+     * read in input time (the audio comes out 10 ms later). */
+    core.setParameterValueDirect(kCompressorLookahead, kCompressorMaxLookaheadMs);
     core.prepare(kFs, 512);
     return core;
 }
@@ -157,35 +160,38 @@ void testCompressorAttackRelease() {
     std::cout << "  Gain reduction reaches 63% in one attack time and decays to 37% in one release time. Pass." << std::endl;
 }
 
-void testCompressorLatencyIsLookahead() {
-    std::cout << "Running testCompressorLatencyIsLookahead..." << std::endl;
+void testCompressorLatencyIsFixedMaximum() {
+    std::cout << "Running testCompressorLatencyIsFixedMaximum..." << std::endl;
+    /* lpi.latency.v1: fixed for an activation. The core always reports
+     * (and delays by) the maximum lookahead, 10 ms = 480 samples at
+     * 48 kHz, whatever the parameter is set to. */
     CompressorCore core;
     core.setParameterValueDirect(kCompressorLookahead, 5.0f);
     core.setParameterValueDirect(kCompressorRatio, 1.0f); /* 1:1 never reduces: a pure delay */
     core.prepare(kFs, 512);
-    assert(core.latencySamples() == 240);
+    assert(core.latencySamples() == 480);
 
     std::vector<float> l(512, 0.0f), r(512, 0.0f);
     l[0] = 1.0f; r[0] = -1.0f;
     core.process(l.data(), r.data(), 512);
     for (int i = 0; i < 512; ++i) {
-        float expectL = i == 240 ? 1.0f : 0.0f;
+        float expectL = i == 480 ? 1.0f : 0.0f;
         assert(std::abs(l[(size_t)i] - expectL) < 1e-6f);
         assert(std::abs(r[(size_t)i] + expectL) < 1e-6f);
     }
 
-    /* Changing the parameter changes the reported latency immediately
-     * (the delay line is sized for the maximum), through the RT queue too. */
+    /* The parameter changes the sidechain's head start, not the latency. */
     assert(core.setParameterValue(kCompressorLookahead, 0.0f));
     core.process(l.data(), r.data(), 512);
-    assert(core.latencySamples() == 0);
+    assert(core.latencySamples() == 480);
     core.setParameterValueDirect(kCompressorLookahead, kCompressorMaxLookaheadMs);
     core.process(l.data(), r.data(), 512);
     assert(core.latencySamples() == 480);
 
     /* Lookahead earns its name: with 5 ms lookahead and a 5 ms attack, a
      * burst that starts at sample 480 is already being turned down when
-     * it arrives at the output (sample 720), unlike with no lookahead. */
+     * it arrives at the output (sample 480 + latency); with 0 ms the gain
+     * change and the audio arrive together and the first sample passes. */
     auto firstBurstPeak = [](float lookaheadMs) {
         CompressorCore c = makeStatic(-30.0f, 20.0f);
         c.setParameterValueDirect(kCompressorAttack, 5.0f);
@@ -200,7 +206,7 @@ void testCompressorLatencyIsLookahead() {
     assert(firstBurstPeak(0.0f) > 0.95f);  /* the first sample of the burst passes almost untouched */
     assert(firstBurstPeak(5.0f) < 0.35f);  /* with lookahead it arrives already attenuated */
 
-    std::cout << "  latencySamples() == lookahead samples, the audio is delayed by exactly that, and transients are caught early. Pass." << std::endl;
+    std::cout << "  latencySamples() is the fixed 10 ms maximum, the audio is delayed by exactly that, and the lookahead parameter still catches transients early. Pass." << std::endl;
 }
 
 void testCompressorMixZeroNulls() {
@@ -218,9 +224,10 @@ void testCompressorMixZeroNulls() {
     }
     core.process(l.data(), r.data(), 4096);
     assert(core.meterGainReductionDb() > 20.0f); /* it was compressing hard... */
-    for (int i = 0; i < 4096; ++i) {
-        assert(l[(size_t)i] == inL[(size_t)i]); /* ...and none of it reached the output */
-        assert(r[(size_t)i] == inR[(size_t)i]);
+    const int latency = core.latencySamples();
+    for (int i = latency; i < 4096; ++i) {
+        assert(l[(size_t)i] == inL[(size_t)(i - latency)]); /* ...and none of it reached the (delayed) output */
+        assert(r[(size_t)i] == inR[(size_t)(i - latency)]);
     }
 
     /* Mix 50%: halfway between dry and wet, in linear amplitude. */
@@ -318,7 +325,7 @@ int main(int argc, char** argv) {
     testCompressorStaticRatio();
     testCompressorSoftKnee();
     testCompressorAttackRelease();
-    testCompressorLatencyIsLookahead();
+    testCompressorLatencyIsFixedMaximum();
     testCompressorMixZeroNulls();
     testCompressorRmsDetector();
     testCompressorAutoMakeup();

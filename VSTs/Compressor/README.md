@@ -29,10 +29,12 @@ Per sample, stereo-linked:
    a release-only stage `y1 = max(target, aR·y1 + (1−aR)·target)` feeding
    an attack stage `y = aA·y + (1−aA)·y1`. A step in gain reduction reaches
    63% in one `Attack`, and decays to 37% in one `Release`.
-5. **Gain**: `10^(−y/20) × makeup` on the input delayed by `Lookahead`,
-   so the gain change arrives with (or before) the transient. The
-   lookahead is the reported latency (`lpi.latency.v1` /
-   `setLatencySamples`) and follows the parameter immediately.
+5. **Gain**: `10^(−y/20) × makeup` on the delayed input, so the gain
+   change arrives `Lookahead` ms before the transient. The audio is always
+   delayed by the maximum lookahead (10 ms) and the sidechain by the
+   difference, so the reported latency (`lpi.latency.v1` /
+   `setLatencySamples`) is fixed for the life of an activation, as the
+   LPI header requires.
 6. **Mix**: dry/wet in linear amplitude, both on the delayed signal, so
    mix 0 is bit-exact dry.
 
@@ -73,9 +75,9 @@ before each render.
 Beyond the generic kit: −20 dBFS sine at threshold −30, 4:1 →
 −27.5 dBFS within 0.05 dB; soft-knee value at the threshold and hard
 curve at the knee edges; attack to 63% and release to 37% in one time
-constant (DC steps, read off the GR meter); `latencySamples()` equals
-the lookahead in samples, the audio is delayed by exactly that, and a
-transient arrives already attenuated; mix 0 bit-exact dry, mix 50 the
+constant (DC steps, read off the GR meter); `latencySamples()` is the
+fixed 10 ms maximum, the audio is delayed by exactly that, and with the
+lookahead set a transient arrives already attenuated; mix 0 bit-exact dry, mix 50 the
 linear midpoint; RMS reads 3 dB lower; auto makeup; sidechain HPF; the
 meter readings; and golden impulse responses for `default`, `heavy` and
 `rms`.

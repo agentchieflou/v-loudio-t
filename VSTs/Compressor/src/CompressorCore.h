@@ -27,10 +27,11 @@
  *               lookahead (the detector sees the undelayed signal);
  *   out       = dry * (1 - mix) + wet * mix, both on the delayed signal.
  *
- * latencySamples() is the lookahead; both wrappers report it. It follows
- * the parameter immediately (the delay line is sized for the maximum), so
- * a host that only reads latency on activation sees the value at that
- * moment -- the LPI contract -- while the JUCE wrapper re-reports changes.
+ * Latency is FIXED at the maximum lookahead (10 ms), whatever the
+ * parameter says: lpi.latency.v1 promises a latency that does not change
+ * for the life of an activation. The audio is always delayed by that
+ * maximum; a shorter lookahead delays the sidechain by the difference
+ * instead, so the gain still arrives `lookahead` ms before the audio.
  */
 class CompressorCore {
 public:
@@ -77,7 +78,8 @@ private:
     loudio::SidechainHpf scHpfL, scHpfR;
     loudio::LevelDetector rmsDetector;
     loudio::GainComputer computer;
-    loudio::Lookahead lookaheadL, lookaheadR;
+    loudio::Lookahead lookaheadL, lookaheadR; /* audio, fixed at the maximum */
+    loudio::Lookahead sidechainDelay;         /* detector level, maximum - lookahead */
     SimpleSmoothedValue smoothedMakeup; /* linear */
     SimpleSmoothedValue smoothedMix;    /* 0..1 */
 

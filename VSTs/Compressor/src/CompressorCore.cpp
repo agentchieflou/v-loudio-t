@@ -30,6 +30,9 @@ void CompressorCore::prepare(double newSampleRate, int /* maxBlockSize */) {
     const int maxLookahead = lookaheadSamplesFor(kCompressorMaxLookaheadMs);
     lookaheadL.prepare(maxLookahead);
     lookaheadR.prepare(maxLookahead);
+    lookaheadL.setDelaySamples(maxLookahead);
+    lookaheadR.setDelaySamples(maxLookahead);
+    sidechainDelay.prepare(maxLookahead);
     smoothedMakeup.reset(sampleRate, 0.02);
     smoothedMix.reset(sampleRate, 0.02);
     grFast = grSmoothed = 0.0f;
@@ -65,8 +68,7 @@ void CompressorCore::applyParams() {
     }
     if (params[kCompressorLookahead] != applied[kCompressorLookahead]) {
         int n = lookaheadSamplesFor(params[kCompressorLookahead]);
-        lookaheadL.setDelaySamples(n);
-        lookaheadR.setDelaySamples(n);
+        sidechainDelay.setDelaySamples(lookaheadSamplesFor(kCompressorMaxLookaheadMs) - n);
     }
     if (params[kCompressorScHpf] != applied[kCompressorScHpf]) {
         scHpfL.setCutoff(params[kCompressorScHpf]);
@@ -102,7 +104,9 @@ void CompressorCore::process(float* left, float* right, int numSamples) {
             level = std::max(std::abs(sl), std::abs(sr));
         }
 
-        /* Gain computer in dB, then the smooth decoupled follower. */
+        /* Gain computer in dB on the (sidechain-delayed) level, then the
+         * smooth decoupled follower. */
+        level = sidechainDelay.process(level);
         const float target = computer.gainReductionDb(loudio::gainToDb(level));
         grFast = std::max(target, aRelease * grFast + (1.0f - aRelease) * target);
         grSmoothed = aAttack * grSmoothed + (1.0f - aAttack) * grFast;
@@ -112,7 +116,7 @@ void CompressorCore::process(float* left, float* right, int numSamples) {
         const float mix = smoothedMix.getNextValue();
         const float gain = loudio::dbToGain(-grSmoothed) * makeup;
 
-        /* Main path: delayed by the lookahead so the gain arrives in time. */
+        /* Main path: delayed by the maximum lookahead (fixed latency). */
         const float dl = lookaheadL.process(l), dr = lookaheadR.process(r);
         const float wl = dl * gain, wr = dr * gain;
         left[i] = dl + (wl - dl) * mix;
