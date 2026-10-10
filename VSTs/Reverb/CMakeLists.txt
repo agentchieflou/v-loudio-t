@@ -32,7 +32,6 @@ juce_generate_juce_header(LoudioReverb)
 
 target_sources(LoudioReverb PRIVATE
     src/PluginProcessor.cpp
-    src/PluginEditor.cpp
     src/ReverbUi.cpp
     src/ReverbCore.cpp
     ../../Framework/src/graphics.c
@@ -44,7 +43,7 @@ target_sources(LoudioReverb PRIVATE
     ../../Framework/src/theme_greens.c
 )
 
-target_include_directories(LoudioReverb PRIVATE src ../../Framework/include ${LOUDIO_DSP_INCLUDE})
+target_include_directories(LoudioReverb PRIVATE src ../common ../../Framework/include ${LOUDIO_DSP_INCLUDE})
 
 target_compile_definitions(LoudioReverb PUBLIC
     JUCE_WEB_BROWSER=0
