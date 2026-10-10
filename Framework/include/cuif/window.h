@@ -98,6 +98,8 @@ bool cuif_window_read_pixels(cuif_window* window, unsigned char* out_rgba, size_
 void cuif_window_inject_mouse_down(cuif_window* window, float logical_x, float logical_y, int button);
 void cuif_window_inject_mouse_up(cuif_window* window, float logical_x, float logical_y, int button);
 void cuif_window_inject_mouse_move(cuif_window* window, float logical_x, float logical_y, int button);
+/* delta_notches: +1 per wheel notch away from the user (see cuif_widget_dispatch_mouse_wheel). */
+void cuif_window_inject_mouse_wheel(cuif_window* window, float logical_x, float logical_y, float delta_notches);
 
 void cuif_window_destroy(cuif_window* window);
 

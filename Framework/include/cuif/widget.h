@@ -125,6 +125,25 @@ void cuif_widget_dispatch_mouse_down(cuif_widget* root, float mx, float my, int 
 void cuif_widget_dispatch_mouse_up(cuif_widget* root, float mx, float my, int button);
 void cuif_widget_dispatch_mouse_move(cuif_widget* root, float mx, float my, float dx, float dy, int button);
 
+/*
+ * Mouse wheel over whatever widget is under (mx, my). delta_notches is in
+ * wheel notches: +1 is one notch away from the user ("up"). Knobs and
+ * sliders step their value by CUIF_WHEEL_STEP per notch (clamped to 0..1)
+ * and fire on_change; other widgets ignore it.
+ */
+#define CUIF_WHEEL_STEP 0.02f
+void cuif_widget_dispatch_mouse_wheel(cuif_widget* root, float mx, float my, float delta_notches);
+
+/*
+ * Double-clicking a knob resets it to its default_value (and fires
+ * on_change) instead of starting a drag. Detection is done inside
+ * cuif_widget_dispatch_mouse_down from two downs on the same widget within
+ * the double-click time and within 4 logical px of each other, so it works
+ * for real WM_LBUTTONDOWN pairs and injected ones alike. 0 (the default)
+ * uses the system double-click time; tests pin a value.
+ */
+void cuif_widget_set_double_click_time_ms(unsigned ms);
+
 #ifdef __cplusplus
 }
 #endif

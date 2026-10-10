@@ -80,6 +80,82 @@ static void tabbarChangedCallback(cuif_widget* w, float value) {
     g_tab_change_call_count++;
 }
 
+static float g_last_knob_value = -1.0f;
+static int g_knob_change_calls = 0;
+static void knobChangedCallback(cuif_widget* w, float value) {
+    (void)w;
+    g_last_knob_value = value;
+    g_knob_change_calls++;
+}
+
+static void testKnobWheelStepsValueAndClamps(void) {
+    printf("Running testKnobWheelStepsValueAndClamps...\n");
+
+    cuif_widget* knob = cuif_widget_create_knob(0.0f, 0.0f, 100.0f, 100.0f, "K", 0.5f, knobChangedCallback);
+    g_knob_change_calls = 0;
+
+    cuif_widget_dispatch_mouse_wheel(knob, 50.0f, 50.0f, 1.0f);
+    assert(fabsf(knob->u.knob.value - 0.52f) < 1e-5f);
+    assert(g_knob_change_calls == 1 && fabsf(g_last_knob_value - 0.52f) < 1e-5f);
+
+    cuif_widget_dispatch_mouse_wheel(knob, 50.0f, 50.0f, -3.0f);
+    assert(fabsf(knob->u.knob.value - 0.46f) < 1e-5f);
+    assert(g_knob_change_calls == 2);
+
+    cuif_widget_dispatch_mouse_wheel(knob, 50.0f, 50.0f, 100.0f);
+    assert(knob->u.knob.value == 1.0f);
+    cuif_widget_dispatch_mouse_wheel(knob, 50.0f, 50.0f, 1.0f); /* already at max: no change, no callback */
+    assert(knob->u.knob.value == 1.0f && g_knob_change_calls == 3);
+
+    cuif_widget_dispatch_mouse_wheel(knob, 150.0f, 150.0f, -1.0f); /* outside the knob */
+    assert(knob->u.knob.value == 1.0f && g_knob_change_calls == 3);
+
+    cuif_widget_destroy(knob);
+    printf("  Wheel steps a knob by %.2f per notch, clamps to 0..1, ignores misses. Pass.\n", CUIF_WHEEL_STEP);
+}
+
+static void testKnobDoubleClickResetsToDefault(void) {
+    printf("Running testKnobDoubleClickResetsToDefault...\n");
+
+    cuif_widget* knob = cuif_widget_create_knob(0.0f, 0.0f, 100.0f, 100.0f, "K", 0.3f, knobChangedCallback);
+    cuif_widget_set_double_click_time_ms(0); /* system setting */
+
+    /* Two quick clicks on the same spot: reset, callback, and NO drag. */
+    knob->u.knob.value = 0.9f;
+    g_knob_change_calls = 0;
+    cuif_widget_dispatch_mouse_down(knob, 50.0f, 50.0f, 0);
+    cuif_widget_dispatch_mouse_up(knob, 50.0f, 50.0f, 0);
+    cuif_widget_dispatch_mouse_down(knob, 50.0f, 50.0f, 0);
+    assert(knob->u.knob.value == 0.3f);
+    assert(g_knob_change_calls == 1 && g_last_knob_value == 0.3f);
+    assert(!knob->u.knob.dragging);
+    cuif_widget_dispatch_mouse_move(knob, 50.0f, 10.0f, 0.0f, -40.0f, 0);
+    assert(knob->u.knob.value == 0.3f); /* the move after a reset must not drag */
+    cuif_widget_dispatch_mouse_up(knob, 50.0f, 10.0f, 0);
+
+    /* Two quick clicks far apart are two single clicks: second one drags. */
+    knob->u.knob.value = 0.9f;
+    cuif_widget_dispatch_mouse_down(knob, 20.0f, 20.0f, 0);
+    cuif_widget_dispatch_mouse_up(knob, 20.0f, 20.0f, 0);
+    cuif_widget_dispatch_mouse_down(knob, 60.0f, 60.0f, 0);
+    assert(knob->u.knob.value == 0.9f && knob->u.knob.dragging);
+    cuif_widget_dispatch_mouse_up(knob, 60.0f, 60.0f, 0);
+
+    /* A slow second click is not a double-click either. */
+    cuif_widget_set_double_click_time_ms(1);
+    knob->u.knob.value = 0.9f;
+    cuif_widget_dispatch_mouse_down(knob, 50.0f, 50.0f, 0);
+    cuif_widget_dispatch_mouse_up(knob, 50.0f, 50.0f, 0);
+    Sleep(20);
+    cuif_widget_dispatch_mouse_down(knob, 50.0f, 50.0f, 0);
+    assert(knob->u.knob.value == 0.9f && knob->u.knob.dragging);
+    cuif_widget_dispatch_mouse_up(knob, 50.0f, 50.0f, 0);
+    cuif_widget_set_double_click_time_ms(0);
+
+    cuif_widget_destroy(knob);
+    printf("  Double-click resets a knob to its default without starting a drag; far-apart or slow clicks don't. Pass.\n");
+}
+
 static void setUpTestWindow(void) {
     cuif_window_desc desc = { 0 };
     desc.title = "cuif_tests (hidden)";
@@ -598,6 +674,9 @@ int main(void) {
     testTabbarCreateDefaults();
     testTabbarClickSelectsCorrectTab();
     testTabbarClickingSelectedTabDoesNotRefire();
+
+    testKnobWheelStepsValueAndClamps();
+    testKnobDoubleClickResetsToDefault();
 
     testDefaultThemeIsActiveInitially();
     testSetThemeChangesActiveTheme();
