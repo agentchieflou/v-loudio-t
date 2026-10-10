@@ -17,7 +17,6 @@ static float mapParamValueToWidget(int index, float rawVal) {
         case kParamDistance: return rawVal;
         case kParamThickness: return rawVal;
         case kParamFreeze: return rawVal > 0.5f ? 1.0f : 0.0f;
-        case kParamMode: return rawVal / 4.0f;
         case kParamDecayLow: return (rawVal - 0.1f) / 1.9f;
         case kParamDecayMid: return (rawVal - 0.1f) / 1.9f;
         case kParamDecayHigh: return (rawVal - 0.1f) / 1.9f;
@@ -45,7 +44,6 @@ static float mapWidgetValueToParam(int index, float widgetVal) {
         case kParamDistance: return widgetVal;
         case kParamThickness: return widgetVal;
         case kParamFreeze: return widgetVal > 0.5f ? 1.0f : 0.0f;
-        case kParamMode: return std::round(widgetVal * 4.0f);
         case kParamDecayLow: return 0.1f + widgetVal * 1.9f;
         case kParamDecayMid: return 0.1f + widgetVal * 1.9f;
         case kParamDecayHigh: return 0.1f + widgetVal * 1.9f;
@@ -94,9 +92,13 @@ static void dropdownChangedCallback(cuif_widget* w, float val) {
     auto* editor = static_cast<LoudioReverbEditor*>(w->parent->user_data);
     if (!editor) return;
     int paramIdx = (int)(intptr_t)w->user_data;
-    float mappedVal = mapWidgetValueToParam(paramIdx, val);
-    
-    ParamUpdateMessage msg = { paramIdx, mappedVal };
+
+    /* cuif dropdowns report the selected item INDEX (0..item_count-1), not a
+     * normalised 0..1 widget value, and Mode's choice index is its parameter
+     * value -- so send it straight through. Running it through
+     * mapWidgetValueToParam (round(val * 4)) sent 4 for "Hall", 8 for
+     * "Plate"..., so every choice except "Room" landed on "Spring". */
+    ParamUpdateMessage msg = { paramIdx, (float)(int)val };
     sendParamUpdates(editor, &msg, 1);
 }
 
