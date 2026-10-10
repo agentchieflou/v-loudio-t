@@ -1,4 +1,5 @@
 #include "ReverbCore.h"
+#include "loudio/plugin/StateBlob.h"
 
 #include <cmath>
 #include <cstring>
@@ -9,10 +10,7 @@
 static const float baseDelayLengths[8] = { 1013.0f, 1123.0f, 1277.0f, 1399.0f, 1511.0f, 1693.0f, 1823.0f, 1999.0f };
 
 ReverbCore::ReverbCore() {
-    for (int i = 0; i < kNumParams; ++i) {
-        params[i] = kReverbParams[i].defaultValue;
-    }
-    cuif_spsc_init(&paramUpdateRingBuffer, paramUpdateStorage, sizeof(paramUpdateStorage));
+    kReverbParamTable.fillDefaults(params);
 }
 
 void ReverbCore::prepare(double newSampleRate, int /* maxBlockSize */) {
@@ -116,13 +114,7 @@ void ReverbCore::updatePostEQ() {
 }
 
 void ReverbCore::drainPendingParameterUpdates() {
-    ParamUpdateMessage msg;
-    while (cuif_spsc_readable(&paramUpdateRingBuffer) >= sizeof(msg)) {
-        if (cuif_spsc_read(&paramUpdateRingBuffer, (unsigned char*)&msg, sizeof(msg)) != sizeof(msg)) break;
-        if (msg.index >= 0 && msg.index < kNumParams) {
-            params[msg.index] = msg.value;
-        }
-    }
+    paramQueue.drainInto(kReverbParamTable, params);
 }
 
 void ReverbCore::process(float* leftChannel, float* rightChannel, int numSamples) {
@@ -355,130 +347,34 @@ void ReverbCore::setParameterValueDirect(int index, float value) {
 }
 
 bool ReverbCore::setParameterValue(int index, float value) {
-    if (index < 0 || index >= kNumParams) return false;
-
     /* All-or-nothing write -- see PluginABI/examples/toy_gain/toy_gain.c
-     * (#98/B1) and the follow-up issue #107 for why cuif_spsc_write()'s
-     * partial-write behavior is unsafe for fixed-size message records. */
-    ParamUpdateMessage msg;
-    msg.index = index;
-    msg.value = value;
-    if (cuif_spsc_writable(&paramUpdateRingBuffer) < sizeof(msg)) return false;
-    return cuif_spsc_write(&paramUpdateRingBuffer, (const unsigned char*)&msg, sizeof(msg)) == sizeof(msg);
+     * (#98/B1) and #107 for why a partial write of a fixed-size record is
+     * unsafe; loudio::ParamQueue refuses rather than half-writes. */
+    return paramQueue.push(kReverbParamTable, index, value);
 }
 
 bool ReverbCore::setParameterValues(const ParamUpdateMessage* updates, size_t count) {
-    if (!updates) return count == 0;
-    for (size_t i = 0; i < count; ++i) {
-        if (updates[i].index < 0 || updates[i].index >= kNumParams) return false;
-    }
-    size_t bytes = count * sizeof(ParamUpdateMessage);
-    if (cuif_spsc_writable(&paramUpdateRingBuffer) < bytes) return false;
-    return cuif_spsc_write(&paramUpdateRingBuffer, (const unsigned char*)updates, bytes) == bytes;
+    return paramQueue.pushAll(kReverbParamTable, updates, count);
 }
 
 /*
- * State blob format v1 (all integers little-endian, as written on x86/x64):
- *
- *   "LRVB"                      4-byte magic
- *   u16 version = 1
- *   u16 entryCount
- *   entryCount x { u8 idLen; char id[idLen]; f32 value; }
- *
- * Keyed on kReverbParams[].id, never on index -- the rule lpi.h states for
- * every LPI plugin -- so inserting or reordering parameters can't silently
- * load a preset's values into the wrong parameters. On load: unknown ids
- * are skipped (a newer build's preset loads in an older build), parameters
- * missing from the blob get their default (an older preset loads in a newer
- * build), values are clamped to the parameter's range, non-finite values
- * fall back to the default. The blob is fully validated before anything is
- * applied, so a truncated/corrupt blob leaves the current state untouched.
- *
- * Legacy: before this format existed getState() wrote the raw float array
- * (kLegacyParamCount floats, positional). A blob of exactly that size with
- * no magic is still accepted, mapped positionally to that original order.
+ * State is the platform's id-keyed blob (loudio::StateBlob v1, format and
+ * load rules documented in DSP/include/loudio/plugin/StateBlob.h) under the
+ * Reverb's own magic. Legacy: before that format existed getState() wrote
+ * the raw float array (kLegacyParamCount floats, positional); a blob of
+ * exactly that size with no magic is still accepted.
  */
 namespace {
-const unsigned char kStateMagic[4] = { 'L', 'R', 'V', 'B' };
-const uint16_t kStateVersion = 1;
+const char kStateMagic[4] = { 'L', 'R', 'V', 'B' };
 const int kLegacyParamCount = 23; /* table size when the raw-array format was written */
-
-float sanitizeParam(int index, float v) {
-    const ReverbParamMeta& m = kReverbParams[index];
-    if (!std::isfinite(v)) return m.defaultValue;
-    if (v < m.minValue) return m.minValue;
-    if (v > m.maxValue) return m.maxValue;
-    return v;
-}
-
-int findParamById(const char* id, size_t len) {
-    for (int i = 0; i < kNumParams; ++i) {
-        if (std::strlen(kReverbParams[i].id) == len && std::memcmp(kReverbParams[i].id, id, len) == 0) return i;
-    }
-    return -1;
-}
 } // namespace
 
 size_t ReverbCore::getState(void* buffer, size_t bufferSize) const {
-    size_t required = sizeof(kStateMagic) + 2 * sizeof(uint16_t);
-    for (int i = 0; i < kNumParams; ++i) {
-        required += 1 + std::strlen(kReverbParams[i].id) + sizeof(float);
-    }
-    if (buffer == nullptr) return required;
-    if (bufferSize < required) return 0;
-
-    unsigned char* out = static_cast<unsigned char*>(buffer);
-    std::memcpy(out, kStateMagic, sizeof(kStateMagic)); out += sizeof(kStateMagic);
-    uint16_t version = kStateVersion, count = (uint16_t)kNumParams;
-    std::memcpy(out, &version, sizeof(version)); out += sizeof(version);
-    std::memcpy(out, &count, sizeof(count)); out += sizeof(count);
-    for (int i = 0; i < kNumParams; ++i) {
-        size_t idLen = std::strlen(kReverbParams[i].id);
-        *out++ = (unsigned char)idLen;
-        std::memcpy(out, kReverbParams[i].id, idLen); out += idLen;
-        std::memcpy(out, &params[i], sizeof(float)); out += sizeof(float);
-    }
-    return required;
+    return loudio::StateBlob::write(kReverbParamTable, kStateMagic, params, buffer, bufferSize);
 }
 
 bool ReverbCore::setState(const void* data, size_t size) {
-    if (!data) return false;
-    const unsigned char* in = static_cast<const unsigned char*>(data);
-    float loaded[kNumParams];
-
-    if (size == sizeof(float) * kLegacyParamCount && std::memcmp(in, kStateMagic, sizeof(kStateMagic)) != 0) {
-        for (int i = 0; i < kNumParams; ++i) loaded[i] = kReverbParams[i].defaultValue;
-        for (int i = 0; i < kLegacyParamCount && i < kNumParams; ++i) {
-            float v;
-            std::memcpy(&v, in + i * sizeof(float), sizeof(float));
-            loaded[i] = sanitizeParam(i, v);
-        }
-        std::memcpy(params, loaded, sizeof(params));
-        return true;
-    }
-
-    const unsigned char* end = in + size;
-    if (size < sizeof(kStateMagic) + 2 * sizeof(uint16_t)) return false;
-    if (std::memcmp(in, kStateMagic, sizeof(kStateMagic)) != 0) return false;
-    in += sizeof(kStateMagic);
-    uint16_t version, count;
-    std::memcpy(&version, in, sizeof(version)); in += sizeof(version);
-    std::memcpy(&count, in, sizeof(count)); in += sizeof(count);
-    if (version != kStateVersion) return false; /* a future v2 needs its own reader */
-
-    for (int i = 0; i < kNumParams; ++i) loaded[i] = kReverbParams[i].defaultValue;
-    for (uint16_t e = 0; e < count; ++e) {
-        if (end - in < 1) return false;
-        size_t idLen = *in++;
-        if ((size_t)(end - in) < idLen + sizeof(float)) return false;
-        const char* id = reinterpret_cast<const char*>(in); in += idLen;
-        float v;
-        std::memcpy(&v, in, sizeof(float)); in += sizeof(float);
-        int index = findParamById(id, idLen);
-        if (index >= 0) loaded[index] = sanitizeParam(index, v);
-    }
-    std::memcpy(params, loaded, sizeof(params));
-    return true;
+    return loudio::StateBlob::read(kReverbParamTable, kStateMagic, data, size, params, kLegacyParamCount);
 }
 
 void ReverbCore::getLeftAnalyzerMagnitudes(float* out64) {

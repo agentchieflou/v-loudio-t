@@ -10,7 +10,7 @@
 #include "loudio/dsp/SimpleSmoothedValue.h"
 #include "loudio/dsp/FFTAnalyzer.h"
 #include "SharedStructures.h"
-#include "cuif/ring_buffer.h"
+#include "loudio/plugin/ParamQueue.h"
 
 /*
  * The Reverb's DSP engine, extracted from LoudioReverbProcessor (#100/B3) so
@@ -32,21 +32,21 @@
  *     forwarding them here on that SAME thread. No queue is needed because
  *     caller and process() are already sequential on one thread.
  *
- *   - setParameterValue(): RT-safe, enqueues via an internal lock-free SPSC
- *     ring buffer (same pattern as Framework/include/cuif/ring_buffer.h
- *     elsewhere in this codebase), applied at the top of the next process()
- *     call. May be called from exactly one dedicated non-realtime thread
- *     over the instance's lifetime -- matches the LPI ABI's
- *     set_parameter_value contract exactly (see
+ *   - setParameterValue(): RT-safe, enqueues via the platform's lock-free
+ *     SPSC loudio::ParamQueue (DSP/include/loudio/plugin, #127), applied at
+ *     the top of the next process() call. May be called from exactly one
+ *     dedicated non-realtime thread over the instance's lifetime -- matches
+ *     the LPI ABI's set_parameter_value contract exactly (see
  *     PluginABI/include/lpi/lpi.h), since that's the mechanism a future LPI
  *     wrapper forwards directly. Not used by the JUCE wrapper today (its
  *     own uiToDspRingBuffer/APVTS bridge in PluginProcessor.cpp/
  *     PluginEditor.cpp is unchanged by this refactor -- that bridge is
  *     JUCE-wrapper-specific, not something ReverbCore needs to know about).
  *
- * Preset/state save (getState/setState) is a small versioned binary blob
- * keyed on parameter id strings (format documented above
- * ReverbCore::getState in ReverbCore.cpp), independent of JUCE's own APVTS XML preset format --
+ * Preset/state save (getState/setState) is the platform's small versioned
+ * binary blob keyed on parameter id strings (loudio::StateBlob, format
+ * documented in DSP/include/loudio/plugin/StateBlob.h; the Reverb's magic
+ * is "LRVB"), independent of JUCE's own APVTS XML preset format --
  * LoudioReverbProcessor::getStateInformation/setStateInformation keep using
  * APVTS's existing XML shape unchanged, preserving current preset-file
  * compatibility. This is a second, separate state mechanism for hosts that
@@ -72,6 +72,8 @@ public:
      * gating -> dry/wet mix. */
     void process(float* leftChannel, float* rightChannel, int numSamples);
 
+    /* The platform core contract (DSP/include/loudio/plugin/CORE_CONTRACT.md). */
+    static const loudio::ParamTable& table() { return kReverbParamTable; }
     int getParameterCount() const { return kNumParams; }
     bool getParameterInfo(int index, ReverbParamMeta* outMeta) const;
     float getParameterValue(int index) const;
@@ -137,6 +139,5 @@ private:
     SimpleSmoothedValue smoothedDistance;
     SimpleSmoothedValue smoothedThickness;
 
-    cuif_spsc_ring_buffer paramUpdateRingBuffer;
-    unsigned char paramUpdateStorage[1024];
+    loudio::ParamQueue<1024> paramQueue;
 };
