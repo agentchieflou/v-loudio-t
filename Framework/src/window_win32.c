@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <gl/gl.h>
 #include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 
 #define CUIF_LOG(fmt, ...) { \
@@ -862,6 +863,23 @@ bool cuif_window_read_pixels(cuif_window* window, unsigned char* out_rgba, size_
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, physical_width, physical_height, GL_RGBA, GL_UNSIGNED_BYTE, out_rgba);
     cuif_glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    /* glReadPixels() hands rows back bottom-up (GL's native origin). The
+     * documented contract above is top-left -- what the LPI frame-streaming
+     * host consumes verbatim -- so flip the rows in place. (Found by the
+     * noprod host's Windows build of #111; the harness only memcmp'd two
+     * frames and couldn't see it.) */
+    size_t row_bytes = (size_t)physical_width * 4;
+    unsigned char* tmp_row = (unsigned char*)malloc(row_bytes);
+    if (!tmp_row) return false;
+    for (int y = 0; y < physical_height / 2; ++y) {
+        unsigned char* top = out_rgba + (size_t)y * row_bytes;
+        unsigned char* bottom = out_rgba + (size_t)(physical_height - 1 - y) * row_bytes;
+        memcpy(tmp_row, top, row_bytes);
+        memcpy(top, bottom, row_bytes);
+        memcpy(bottom, tmp_row, row_bytes);
+    }
+    free(tmp_row);
 
     return true;
 }

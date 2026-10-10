@@ -8,18 +8,22 @@
  * Output: lpi_reverb_before.ppm / lpi_reverb_after.ppm in the working dir.
  */
 #include <windows.h>
-#include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "lpi/lpi.h"
 
+/* Not CHECK(): several checks below have side effects (activate, open,
+ * render, read_pixels) and must run under NDEBUG too. */
+#define CHECK(cond) do { if (!(cond)) { \
+    fprintf(stderr, "CHECK failed: %s (%s:%d)\n", #cond, __FILE__, __LINE__); exit(1); } } while (0)
+
 enum { kDecayTimeIndex = 1 }; /* kParamDecayTime in SharedStructures.h */
 
 static void writePpm(const char* path, const unsigned char* rgba, int w, int h) {
     FILE* f = fopen(path, "wb");
-    assert(f);
+    CHECK(f);
     fprintf(f, "P6\n%d %d\n255\n", w, h);
     for (int i = 0; i < w * h; ++i) fwrite(rgba + i * 4, 1, 3, f);
     fclose(f);
@@ -36,27 +40,27 @@ static void processBlock(const lpi_plugin_api* api, lpi_plugin* inst) {
 
 int main(void) {
     HMODULE m = LoadLibraryW(L"lpi_reverb.dll");
-    assert(m);
+    CHECK(m);
     lpi_get_factory_fn getFactory = (lpi_get_factory_fn)GetProcAddress(m, LPI_GET_FACTORY_SYMBOL_NAME);
-    assert(getFactory);
+    CHECK(getFactory);
     const lpi_plugin_factory* factory = getFactory();
-    assert(factory->abi_version.major == LPI_ABI_VERSION_MAJOR);
+    CHECK(factory->abi_version.major == LPI_ABI_VERSION_MAJOR);
     const lpi_plugin_api* api = factory->get_api();
 
     lpi_plugin* inst = api->create(48000.0, 512);
-    assert(inst && api->activate(inst));
+    CHECK(inst && api->activate(inst));
 
     lpi_parameter_info pinfo;
-    assert(api->get_parameter_count(inst) == 23);
-    assert(api->get_parameter_info(inst, kDecayTimeIndex, &pinfo));
-    assert(strcmp(pinfo.id, "decayTime") == 0);
+    CHECK(api->get_parameter_count(inst) == 23);
+    CHECK(api->get_parameter_info(inst, kDecayTimeIndex, &pinfo));
+    CHECK(strcmp(pinfo.id, "decayTime") == 0);
 
     const lpi_gui_offscreen_v1* gui = (const lpi_gui_offscreen_v1*)api->get_extension(inst, LPI_EXT_GUI_OFFSCREEN_V1);
-    assert(gui);
+    CHECK(gui);
 
     lpi_gui_offscreen_info info;
-    assert(gui->open(inst, 1.0f, &info));
-    assert(info.physical_width == info.logical_width); /* dpi 1.0 */
+    CHECK(gui->open(inst, 1.0f, &info));
+    CHECK(info.physical_width == info.logical_width); /* dpi 1.0 */
     size_t bytes = (size_t)info.physical_width * info.physical_height * 4;
     unsigned char* before = (unsigned char*)malloc(bytes);
     unsigned char* after = (unsigned char*)malloc(bytes);
@@ -64,11 +68,11 @@ int main(void) {
     /* A second editor in the same process must be refused (v1 scope). */
     lpi_plugin* inst2 = api->create(48000.0, 512);
     lpi_gui_offscreen_info info2;
-    assert(!gui->open(inst2, 1.0f, &info2));
+    CHECK(!gui->open(inst2, 1.0f, &info2));
     api->destroy(inst2);
 
-    assert(gui->render(inst));
-    assert(gui->read_pixels(inst, before, bytes));
+    CHECK(gui->render(inst));
+    CHECK(gui->read_pixels(inst, before, bytes));
     writePpm("lpi_reverb_before.ppm", before, (int)info.physical_width, (int)info.physical_height);
 
     float defaultDecay = api->get_parameter_value(inst, kDecayTimeIndex);
@@ -83,12 +87,35 @@ int main(void) {
     processBlock(api, inst);
     float newDecay = api->get_parameter_value(inst, kDecayTimeIndex);
     printf("decayTime: %.3f -> %.3f\n", defaultDecay, newDecay);
-    assert(fabsf(newDecay - defaultDecay) > 0.05f);
+    CHECK(fabsf(newDecay - defaultDecay) > 0.05f);
 
-    assert(gui->render(inst));
-    assert(gui->read_pixels(inst, after, bytes));
+    CHECK(gui->render(inst));
+    CHECK(gui->read_pixels(inst, after, bytes));
     writePpm("lpi_reverb_after.ppm", after, (int)info.physical_width, (int)info.physical_height);
-    assert(memcmp(before, after, bytes) != 0);
+    CHECK(memcmp(before, after, bytes) != 0);
+
+    /* Orientation guard: the only widget that changed is the decay knob,
+     * rect (345,50,110,110) in ReverbLayout.h. With top-left rows (the
+     * read_pixels contract) every differing pixel lands inside it; a
+     * bottom-up frame would put them around y = 440..550 and fail here. */
+    {
+        int w = (int)info.physical_width, h = (int)info.physical_height;
+        int minX = w, minY = h, maxX = -1, maxY = -1;
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                size_t i = ((size_t)y * (size_t)w + (size_t)x) * 4;
+                if (memcmp(before + i, after + i, 4) != 0) {
+                    if (x < minX) minX = x; if (x > maxX) maxX = x;
+                    if (y < minY) minY = y; if (y > maxY) maxY = y;
+                }
+            }
+        }
+        printf("changed pixels: x %d..%d, y %d..%d\n", minX, maxX, minY, maxY);
+        const int margin = 4; /* anti-aliasing bleed */
+        CHECK(maxX >= 0);
+        CHECK(minX >= 345 - margin && maxX <= 345 + 110 + margin);
+        CHECK(minY >= 50 - margin && maxY <= 50 + 110 + margin);
+    }
 
     gui->close(inst);
     api->deactivate(inst);

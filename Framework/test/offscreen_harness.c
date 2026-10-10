@@ -25,9 +25,9 @@ static void on_knob_change(cuif_widget* w, float val) {
 }
 
 /*
- * Minimal 24bpp uncompressed BMP writer. glReadPixels() returns rows
- * bottom-up (OpenGL's native row order) and RGBA channel order; a BMP with
- * a positive height is ALSO stored bottom-up, so only the per-pixel
+ * Minimal 24bpp uncompressed BMP writer. cuif_window_read_pixels() returns
+ * rows top-down (its documented top-left origin) in RGBA channel order; a
+ * BMP with a NEGATIVE height is stored top-down too, so only the per-pixel
  * RGBA->BGR channel reorder (and dropping alpha, which a 24bpp BMP has no
  * room for) is needed -- no row flip required.
  */
@@ -48,7 +48,7 @@ static bool write_bmp_rgba(const char* path, const unsigned char* rgba, int widt
     unsigned char info_header[40] = {0};
     *(unsigned int*)(info_header + 0) = 40; /* header size */
     *(int*)(info_header + 4) = width;
-    *(int*)(info_header + 8) = height; /* positive => bottom-up */
+    *(int*)(info_header + 8) = -height; /* negative => top-down, matching read_pixels */
     *(unsigned short*)(info_header + 12) = 1;  /* planes */
     *(unsigned short*)(info_header + 14) = 24; /* bitcount */
     fwrite(info_header, 1, sizeof(info_header), f);
