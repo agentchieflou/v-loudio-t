@@ -112,6 +112,211 @@ cuif_widget* cuif_widget_create_tabbar(float x, float y, float w, float h, const
     return widget;
 }
 
+/* ---- Meter, transfer curve, EQ curve (#131) ---- */
+
+static float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+cuif_widget* cuif_widget_create_meter(float x, float y, float w, float h, float min_db, float max_db, bool is_vertical) {
+    cuif_widget* widget = cuif_widget_create_base(CUIF_WIDGET_METER, x, y, w, h);
+    if (!widget) return NULL;
+    if (max_db <= min_db) max_db = min_db + 1.0f;
+    widget->u.meter.min_db = min_db;
+    widget->u.meter.max_db = max_db;
+    widget->u.meter.is_vertical = is_vertical;
+    widget->u.meter.fill_from_top = false;
+    widget->u.meter.fed_db = min_db;
+    widget->u.meter.value_db = min_db;
+    widget->u.meter.peak_db = min_db;
+    widget->u.meter.fall_db_per_second = 24.0f;
+    widget->u.meter.peak_hold_ms = 1500.0f;
+    widget->u.meter.peak_age_ms = 0.0f;
+    widget->u.meter.last_step_ms = 0;
+    return widget;
+}
+
+void cuif_widget_meter_feed(cuif_widget* w, float level_db) {
+    if (!w || w->type != CUIF_WIDGET_METER) return;
+    float v = clampf(level_db, w->u.meter.min_db, w->u.meter.max_db);
+    w->u.meter.fed_db = v;
+    if (v > w->u.meter.value_db) w->u.meter.value_db = v; /* rises instantly */
+    if (v >= w->u.meter.peak_db) {
+        w->u.meter.peak_db = v;
+        w->u.meter.peak_age_ms = 0.0f;
+    }
+}
+
+void cuif_widget_meter_step(cuif_widget* w, float dt_seconds) {
+    if (!w || w->type != CUIF_WIDGET_METER || dt_seconds <= 0.0f) return;
+    float fall = w->u.meter.fall_db_per_second * dt_seconds;
+    float floor_db = w->u.meter.fed_db;
+    if (w->u.meter.value_db > floor_db) {
+        w->u.meter.value_db -= fall;
+        if (w->u.meter.value_db < floor_db) w->u.meter.value_db = floor_db;
+    }
+    w->u.meter.peak_age_ms += dt_seconds * 1000.0f;
+    if (w->u.meter.peak_age_ms > w->u.meter.peak_hold_ms && w->u.meter.peak_db > w->u.meter.value_db) {
+        w->u.meter.peak_db -= fall;
+        if (w->u.meter.peak_db < w->u.meter.value_db) w->u.meter.peak_db = w->u.meter.value_db;
+    }
+}
+
+cuif_widget* cuif_widget_create_transfer_curve(float x, float y, float w, float h, float min_db, float max_db) {
+    cuif_widget* widget = cuif_widget_create_base(CUIF_WIDGET_TRANSFER_CURVE, x, y, w, h);
+    if (!widget) return NULL;
+    if (max_db <= min_db) max_db = min_db + 1.0f;
+    widget->u.transfer_curve.min_db = min_db;
+    widget->u.transfer_curve.max_db = max_db;
+    widget->u.transfer_curve.threshold_db = max_db; /* 1:1 until set */
+    widget->u.transfer_curve.ratio = 1.0f;
+    widget->u.transfer_curve.knee_db = 0.0f;
+    widget->u.transfer_curve.range_db = 0.0f;
+    widget->u.transfer_curve.expander = false;
+    widget->u.transfer_curve.has_point = false;
+    return widget;
+}
+
+void cuif_widget_transfer_curve_set(cuif_widget* w, float threshold_db, float ratio, float knee_db, float range_db, bool expander) {
+    if (!w || w->type != CUIF_WIDGET_TRANSFER_CURVE) return;
+    w->u.transfer_curve.threshold_db = threshold_db;
+    w->u.transfer_curve.ratio = ratio < 1.0f ? 1.0f : ratio;
+    w->u.transfer_curve.knee_db = knee_db < 0.0f ? 0.0f : knee_db;
+    w->u.transfer_curve.range_db = range_db < 0.0f ? 0.0f : range_db;
+    w->u.transfer_curve.expander = expander;
+}
+
+void cuif_widget_transfer_curve_feed(cuif_widget* w, float in_db, float out_db) {
+    if (!w || w->type != CUIF_WIDGET_TRANSFER_CURVE) return;
+    w->u.transfer_curve.point_in_db = in_db;
+    w->u.transfer_curve.point_out_db = out_db;
+    w->u.transfer_curve.has_point = true;
+}
+
+/* Mirrors loudio::GainComputer::outputDb (DSP/include/loudio/dsp/GainComputer.h). */
+float cuif_widget_transfer_curve_output_db(const cuif_widget* w, float x) {
+    if (!w || w->type != CUIF_WIDGET_TRANSFER_CURVE) return x;
+    float t = w->u.transfer_curve.threshold_db;
+    float r = w->u.transfer_curve.ratio;
+    float k = w->u.transfer_curve.knee_db;
+    float over = 2.0f * (x - t);
+    if (!w->u.transfer_curve.expander) {
+        float slope = 1.0f / r;
+        if (over < -k) return x;
+        if (over > k || k <= 0.0f) return t + (x - t) * slope;
+        float d = x - t + k * 0.5f;
+        return x + (slope - 1.0f) * d * d / (2.0f * k);
+    } else {
+        float y;
+        if (over > k) y = x;
+        else if (over < -k || k <= 0.0f) y = t + (x - t) * r;
+        else { float d = x - t - k * 0.5f; y = x + (1.0f - r) * d * d / (2.0f * k); }
+        float range = w->u.transfer_curve.range_db;
+        if (range > 0.0f && x - y > range) y = x - range;
+        return y;
+    }
+}
+
+cuif_widget* cuif_widget_create_eq_curve(float x, float y, float w, float h, int band_count,
+                                         float min_hz, float max_hz, float min_db, float max_db,
+                                         cuif_widget_value_changed_fn on_band_change) {
+    cuif_widget* widget = cuif_widget_create_base(CUIF_WIDGET_EQ_CURVE, x, y, w, h);
+    if (!widget) return NULL;
+    if (band_count < 1) band_count = 1;
+    if (band_count > CUIF_EQ_CURVE_MAX_BANDS) band_count = CUIF_EQ_CURVE_MAX_BANDS;
+    if (min_hz <= 0.0f) min_hz = 1.0f;
+    if (max_hz <= min_hz) max_hz = min_hz * 2.0f;
+    if (max_db <= min_db) max_db = min_db + 1.0f;
+    widget->u.eq_curve.band_count = band_count;
+    for (int i = 0; i < CUIF_EQ_CURVE_MAX_BANDS; ++i) {
+        widget->u.eq_curve.band_hz[i] = 1000.0f;
+        widget->u.eq_curve.band_gain_db[i] = 0.0f;
+        widget->u.eq_curve.band_q[i] = 0.707f;
+        widget->u.eq_curve.band_enabled[i] = false;
+    }
+    widget->u.eq_curve.min_hz = min_hz;
+    widget->u.eq_curve.max_hz = max_hz;
+    widget->u.eq_curve.min_db = min_db;
+    widget->u.eq_curve.max_db = max_db;
+    widget->u.eq_curve.min_q = 0.1f;
+    widget->u.eq_curve.max_q = 30.0f;
+    widget->u.eq_curve.response_db = NULL;
+    widget->u.eq_curve.response_count = 0;
+    widget->u.eq_curve.active_band = -1;
+    widget->u.eq_curve.draw_background = true;
+    widget->u.eq_curve.on_band_change = on_band_change;
+    return widget;
+}
+
+void cuif_widget_eq_curve_set_band(cuif_widget* w, int band, float hz, float gain_db, float q, bool enabled) {
+    if (!w || w->type != CUIF_WIDGET_EQ_CURVE || band < 0 || band >= w->u.eq_curve.band_count) return;
+    w->u.eq_curve.band_hz[band] = clampf(hz, w->u.eq_curve.min_hz, w->u.eq_curve.max_hz);
+    w->u.eq_curve.band_gain_db[band] = clampf(gain_db, w->u.eq_curve.min_db, w->u.eq_curve.max_db);
+    w->u.eq_curve.band_q[band] = clampf(q, w->u.eq_curve.min_q, w->u.eq_curve.max_q);
+    w->u.eq_curve.band_enabled[band] = enabled;
+}
+
+void cuif_widget_eq_curve_set_response(cuif_widget* w, const float* response_db, int count) {
+    if (!w || w->type != CUIF_WIDGET_EQ_CURVE) return;
+    w->u.eq_curve.response_db = response_db;
+    w->u.eq_curve.response_count = response_db ? count : 0;
+}
+
+/* Log-frequency x and linear-dB y mapping shared by render, hit test and drag. */
+static float eq_hz_to_x(const cuif_widget* w, float hz) {
+    float lo = logf(w->u.eq_curve.min_hz), hi = logf(w->u.eq_curve.max_hz);
+    float t = (logf(clampf(hz, w->u.eq_curve.min_hz, w->u.eq_curve.max_hz)) - lo) / (hi - lo);
+    return w->x + t * w->w;
+}
+static float eq_x_to_hz(const cuif_widget* w, float x) {
+    float t = clampf((x - w->x) / w->w, 0.0f, 1.0f);
+    float lo = logf(w->u.eq_curve.min_hz), hi = logf(w->u.eq_curve.max_hz);
+    return expf(lo + t * (hi - lo));
+}
+static float eq_db_to_y(const cuif_widget* w, float db) {
+    float t = (clampf(db, w->u.eq_curve.min_db, w->u.eq_curve.max_db) - w->u.eq_curve.min_db) / (w->u.eq_curve.max_db - w->u.eq_curve.min_db);
+    return w->y + w->h - t * w->h;
+}
+static float eq_y_to_db(const cuif_widget* w, float y) {
+    float t = clampf((w->y + w->h - y) / w->h, 0.0f, 1.0f);
+    return w->u.eq_curve.min_db + t * (w->u.eq_curve.max_db - w->u.eq_curve.min_db);
+}
+
+void cuif_widget_eq_curve_handle_position(const cuif_widget* w, int band, float* out_x, float* out_y) {
+    if (!w || w->type != CUIF_WIDGET_EQ_CURVE || band < 0 || band >= w->u.eq_curve.band_count) {
+        if (out_x) *out_x = 0.0f;
+        if (out_y) *out_y = 0.0f;
+        return;
+    }
+    if (out_x) *out_x = eq_hz_to_x(w, w->u.eq_curve.band_hz[band]);
+    if (out_y) *out_y = eq_db_to_y(w, w->u.eq_curve.band_gain_db[band]);
+}
+
+/* Nearest enabled band handle within CUIF_EQ_HANDLE_RADIUS of (mx, my), or -1. */
+static int eq_band_at(const cuif_widget* w, float mx, float my) {
+    int best = -1;
+    float best_d = CUIF_EQ_HANDLE_RADIUS;
+    for (int i = 0; i < w->u.eq_curve.band_count; ++i) {
+        if (!w->u.eq_curve.band_enabled[i]) continue;
+        float hx, hy;
+        cuif_widget_eq_curve_handle_position(w, i, &hx, &hy);
+        float d = sqrtf((mx - hx) * (mx - hx) + (my - hy) * (my - hy));
+        if (d <= best_d) { best_d = d; best = i; }
+    }
+    return best;
+}
+
+static void draw_graph_frame(const cuif_widget* w, const cuif_theme* theme, int cols, int rows, bool background) {
+    if (background) cuif_draw_rect(w->x, w->y, w->w, w->h, theme->background, true);
+    cuif_draw_rect(w->x, w->y, w->w, w->h, theme->border, false);
+    for (int i = 1; i < cols; ++i) {
+        float gx = w->x + (float)i / cols * w->w;
+        cuif_draw_line(gx, w->y, gx, w->y + w->h, 1.0f, theme->grid_line);
+    }
+    for (int i = 1; i < rows; ++i) {
+        float gy = w->y + (float)i / rows * w->h;
+        cuif_draw_line(w->x, gy, w->x + w->w, gy, 1.0f, theme->grid_line);
+    }
+}
+
 /* Double-click detection state (see widget.h). One UI thread, so plain statics. */
 static cuif_widget* s_last_click_widget = NULL;
 static unsigned long long s_last_click_time_ms = 0;
@@ -535,6 +740,99 @@ void cuif_widget_render(cuif_widget* w) {
             }
             break;
         }
+
+        case CUIF_WIDGET_METER: {
+            /* Advance ballistics from the wall clock. */
+            unsigned long long now = GetTickCount64();
+            if (w->u.meter.last_step_ms != 0 && now > w->u.meter.last_step_ms) {
+                cuif_widget_meter_step(w, (float)(now - w->u.meter.last_step_ms) * 0.001f);
+            }
+            w->u.meter.last_step_ms = now;
+
+            cuif_draw_rounded_rect(w->x, w->y, w->w, w->h, 3.0f, theme_bg_dark, true);
+            cuif_draw_rounded_rect(w->x, w->y, w->w, w->h, 3.0f, theme_border, false);
+
+            float range = w->u.meter.max_db - w->u.meter.min_db;
+            float t_val = (w->u.meter.value_db - w->u.meter.min_db) / range;
+            float t_peak = (w->u.meter.peak_db - w->u.meter.min_db) / range;
+            if (w->u.meter.fill_from_top) { t_val = 1.0f - t_val; t_peak = 1.0f - t_peak; }
+            float inset = 2.0f;
+            if (w->u.meter.is_vertical) {
+                float inner_h = w->h - 2.0f * inset;
+                float bar_h = t_val * inner_h;
+                float bar_y = w->u.meter.fill_from_top ? w->y + inset : w->y + w->h - inset - bar_h;
+                cuif_draw_rect(w->x + inset, bar_y, w->w - 2.0f * inset, bar_h, theme_primary, true);
+                float py = w->u.meter.fill_from_top ? w->y + inset + t_peak * inner_h : w->y + w->h - inset - t_peak * inner_h;
+                cuif_draw_line(w->x + inset, py, w->x + w->w - inset, py, 2.0f, text_white);
+            } else {
+                float inner_w = w->w - 2.0f * inset;
+                float bar_w = t_val * inner_w;
+                float bar_x = w->u.meter.fill_from_top ? w->x + w->w - inset - bar_w : w->x + inset;
+                cuif_draw_rect(bar_x, w->y + inset, bar_w, w->h - 2.0f * inset, theme_primary, true);
+                float px = w->u.meter.fill_from_top ? w->x + w->w - inset - t_peak * inner_w : w->x + inset + t_peak * inner_w;
+                cuif_draw_line(px, w->y + inset, px, w->y + w->h - inset, 2.0f, text_white);
+            }
+            break;
+        }
+
+        case CUIF_WIDGET_TRANSFER_CURVE: {
+            draw_graph_frame(w, active_theme, 6, 6, true);
+            float lo = w->u.transfer_curve.min_db, hi = w->u.transfer_curve.max_db;
+            /* Unity reference. */
+            cuif_draw_line(w->x, w->y + w->h, w->x + w->w, w->y, 1.0f, text_gray);
+            /* The curve, left to right. */
+            enum { kPts = 96 };
+            float pts[kPts * 2];
+            for (int i = 0; i < kPts; ++i) {
+                float t = (float)i / (kPts - 1);
+                float in_db = lo + t * (hi - lo);
+                float out_db = clampf(cuif_widget_transfer_curve_output_db(w, in_db), lo, hi);
+                pts[i * 2] = w->x + t * w->w;
+                pts[i * 2 + 1] = w->y + w->h - (out_db - lo) / (hi - lo) * w->h;
+            }
+            cuif_draw_polyline(pts, kPts, 2.0f, theme_primary, false);
+            /* Threshold marker. */
+            float tt = clampf((w->u.transfer_curve.threshold_db - lo) / (hi - lo), 0.0f, 1.0f);
+            cuif_draw_line(w->x + tt * w->w, w->y, w->x + tt * w->w, w->y + w->h, 1.0f, active_theme->grid_line);
+            if (w->u.transfer_curve.has_point) {
+                float px = w->x + clampf((w->u.transfer_curve.point_in_db - lo) / (hi - lo), 0.0f, 1.0f) * w->w;
+                float py = w->y + w->h - clampf((w->u.transfer_curve.point_out_db - lo) / (hi - lo), 0.0f, 1.0f) * w->h;
+                cuif_draw_rounded_rect(px - 4.0f, py - 4.0f, 8.0f, 8.0f, 4.0f, text_white, true);
+            }
+            break;
+        }
+
+        case CUIF_WIDGET_EQ_CURVE: {
+            draw_graph_frame(w, active_theme, 10, 6, w->u.eq_curve.draw_background);
+            /* 0 dB line. */
+            float zy = eq_db_to_y(w, 0.0f);
+            cuif_draw_line(w->x, zy, w->x + w->w, zy, 1.0f, text_gray);
+            /* Host-supplied response. */
+            if (w->u.eq_curve.response_db && w->u.eq_curve.response_count > 1) {
+                float pts[512 * 2];
+                int n = w->u.eq_curve.response_count < 512 ? w->u.eq_curve.response_count : 512;
+                for (int i = 0; i < n; ++i) {
+                    pts[i * 2] = w->x + (float)i / (n - 1) * w->w;
+                    pts[i * 2 + 1] = eq_db_to_y(w, w->u.eq_curve.response_db[i]);
+                }
+                cuif_draw_polyline(pts, n, 2.0f, theme_primary, false);
+            }
+            /* Handles: a filled dot per enabled band, the active one larger. */
+            for (int i = 0; i < w->u.eq_curve.band_count; ++i) {
+                if (!w->u.eq_curve.band_enabled[i]) continue;
+                float hx, hy;
+                cuif_widget_eq_curve_handle_position(w, i, &hx, &hy);
+                float r = (i == w->u.eq_curve.active_band) ? 7.0f : 5.0f;
+                cuif_draw_rounded_rect(hx - r, hy - r, 2.0f * r, 2.0f * r, r, theme_panel_bg, true);
+                cuif_draw_rounded_rect(hx - r, hy - r, 2.0f * r, 2.0f * r, r, text_white, false);
+                if (cuif_global_font) {
+                    char label[4];
+                    sprintf_s(label, sizeof(label), "%d", i + 1);
+                    cuif_draw_text(cuif_global_font, label, hx + r + 2.0f, hy + 4.0f, text_white);
+                }
+            }
+            break;
+        }
     }
 
     /* Render children */
@@ -678,6 +976,11 @@ void cuif_widget_dispatch_mouse_down(cuif_widget* root, float mx, float my, int 
             break;
         }
         
+        case CUIF_WIDGET_EQ_CURVE:
+            hit->u.eq_curve.active_band = eq_band_at(hit, mx, my);
+            if (hit->u.eq_curve.active_band < 0) cuif_window_set_active_widget(cuif_current_window, NULL);
+            break;
+
         default:
             break;
     }
@@ -709,6 +1012,9 @@ void cuif_widget_dispatch_mouse_up(cuif_widget* root, float mx, float my, int bu
             break;
         case CUIF_WIDGET_BEZIER_EDITOR:
             w->u.bezier_editor.active_node = -1;
+            break;
+        case CUIF_WIDGET_EQ_CURVE:
+            w->u.eq_curve.active_band = -1;
             break;
         default:
             break;
@@ -800,6 +1106,15 @@ void cuif_widget_dispatch_mouse_move(cuif_widget* root, float mx, float my, floa
             }
             break;
         }
+
+        case CUIF_WIDGET_EQ_CURVE: {
+            int band = w->u.eq_curve.active_band;
+            if (band < 0 || band >= w->u.eq_curve.band_count) break;
+            w->u.eq_curve.band_hz[band] = eq_x_to_hz(w, mx);
+            w->u.eq_curve.band_gain_db[band] = eq_y_to_db(w, my);
+            if (w->u.eq_curve.on_band_change) w->u.eq_curve.on_band_change(w, (float)band);
+            break;
+        }
         
         default:
             break;
@@ -810,6 +1125,17 @@ void cuif_widget_dispatch_mouse_wheel(cuif_widget* root, float mx, float my, flo
     if (!root || delta_notches == 0.0f) return;
     cuif_widget* hit = hit_test(root, mx, my);
     if (!hit) return;
+
+    if (hit->type == CUIF_WIDGET_EQ_CURVE) {
+        int band = eq_band_at(hit, mx, my);
+        if (band < 0) return;
+        float q = hit->u.eq_curve.band_q[band] * powf(CUIF_EQ_WHEEL_Q_FACTOR, delta_notches);
+        q = clampf(q, hit->u.eq_curve.min_q, hit->u.eq_curve.max_q);
+        if (q == hit->u.eq_curve.band_q[band]) return;
+        hit->u.eq_curve.band_q[band] = q;
+        if (hit->u.eq_curve.on_band_change) hit->u.eq_curve.on_band_change(hit, (float)band);
+        return;
+    }
 
     float* value = NULL;
     cuif_widget_value_changed_fn on_change = NULL;
