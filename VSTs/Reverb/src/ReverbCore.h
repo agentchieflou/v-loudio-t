@@ -78,6 +78,11 @@ public:
 
     void setParameterValueDirect(int index, float value);
     bool setParameterValue(int index, float value);
+    /* Batched setParameterValue: enqueues all `count` updates or none (if
+     * any index is invalid or the queue lacks room for the whole batch), so
+     * related edits -- e.g. the decay-EQ curve's three nodes -- can't be
+     * half-applied. Same thread rules as setParameterValue. */
+    bool setParameterValues(const ParamUpdateMessage* updates, size_t count);
 
     /* Two-call sizing idiom, matching lpi_plugin_api::get_state: buffer ==
      * nullptr returns the required size without writing anything. */

@@ -24,6 +24,7 @@ juce_generate_juce_header(LoudioReverb)
 target_sources(LoudioReverb PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
+    src/ReverbUi.cpp
     src/ReverbCore.cpp
     ../../Framework/src/graphics.c
     ../../Framework/src/font.c
@@ -91,6 +92,7 @@ if(LOUDIO_REVERB_BUILD_LPI AND WIN32)
 
     add_library(lpi_reverb SHARED
         src/lpi_reverb.cpp
+        src/ReverbUi.cpp
         src/ReverbCore.cpp
         ../../Framework/src/window_win32.c
         ../../Framework/src/graphics.c

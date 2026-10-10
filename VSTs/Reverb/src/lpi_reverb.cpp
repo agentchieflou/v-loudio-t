@@ -1,11 +1,8 @@
 /*
  * LPI-ABI wrapper for the Reverb (#101/B4). Built directly against
  * ReverbCore -- no JUCE, no APVTS. Implements lpi.gui.offscreen.v1 by
- * building the same widget tree PluginEditor.cpp builds (same
- * ReverbLayout.h rects, same labels), rendered into a cuif offscreen
- * window. PluginEditor.cpp is deliberately left untouched; the widget
- * construction is duplicated here rather than refactored so the shipping
- * VST3 editor can't regress.
+ * rendering the shared ReverbUi widget tree (the same one the VST3 editor
+ * uses) into a cuif offscreen window.
  *
  * Threading: audio thread -> process(). One "GUI thread" -> all of the
  * lpi.gui.offscreen.v1 calls AND set_parameter_value (both feed
@@ -18,8 +15,7 @@
  */
 #include "lpi/lpi.h"
 #include "ReverbCore.h"
-#include "ReverbLayout.h"
-#include "ReverbThemeMapping.h"
+#include "ReverbUi.h"
 #include "cuif/cuif.h"
 #include "cuif/cuif_dpi_utils.h"
 
@@ -27,7 +23,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <new>
-#include <vector>
 
 namespace {
 
@@ -40,116 +35,27 @@ bool g_guiOpen = false; /* v1: one editor per process */
 struct ReverbGui {
     ReverbCore* core = nullptr;
     cuif_window* window = nullptr;
-    cuif_widget* root = nullptr;
-    cuif_widget* mainPage = nullptr;
-    cuif_widget* advancedPage = nullptr;
-    cuif_widget* knobs[kNumParams] = {};
-    cuif_widget* freezeButton = nullptr;
-    cuif_widget* modeDropdown = nullptr;
-    cuif_widget* themeDropdown = nullptr;
-    cuif_widget* bezier = nullptr;
-    float leftSpectrum[64] = {};
-    float rightSpectrum[64] = {};
+    ReverbUi* ui = nullptr;
     bool ownsFont = false;
     bool buttonDown = false;
     int physW = 0, physH = 0;
 };
 
-float widgetToParam(int idx, float w) {
-    const ReverbParamMeta& m = kReverbParams[idx];
-    if (idx == kParamFreeze) return w > 0.5f ? 1.0f : 0.0f;
-    float v = m.minValue + w * (m.maxValue - m.minValue);
-    if (idx == kParamMode || idx == kParamUiTheme) v = std::round(v);
-    return v;
-}
-
-float paramToWidget(int idx, float v) {
-    const ReverbParamMeta& m = kReverbParams[idx];
-    return (v - m.minValue) / (m.maxValue - m.minValue);
-}
-
-ReverbGui* guiOf(cuif_widget* w) {
-    return (w && w->parent) ? static_cast<ReverbGui*>(w->parent->user_data) : nullptr;
-}
-
-void sendParam(ReverbGui* g, int idx, float value) {
-    /* All-or-nothing inside ReverbCore::setParameterValue; a dropped
-     * intermediate UI value is fine (see #107). */
-    g->core->setParameterValue(idx, value);
-}
-
-void knobChanged(cuif_widget* w, float v) {
-    if (ReverbGui* g = guiOf(w)) {
-        int idx = (int)(intptr_t)w->user_data;
-        sendParam(g, idx, widgetToParam(idx, v));
-    }
-}
-
-void dropdownChanged(cuif_widget* w, float v) {
-    if (ReverbGui* g = guiOf(w)) {
-        int idx = (int)(intptr_t)w->user_data;
-        /* Dropdown reports the selected index directly. */
-        sendParam(g, idx, v);
-    }
-}
-
-void themeChanged(cuif_widget* w, float v) {
-    if (ReverbGui* g = guiOf(w)) {
-        cuif_set_theme(themeForUiThemeIndex((int)v));
-        sendParam(g, kParamUiTheme, (float)(int)v);
-    }
-}
-
-void buttonClicked(cuif_widget* w) {
-    if (ReverbGui* g = guiOf(w)) {
-        int idx = (int)(intptr_t)w->user_data;
-        sendParam(g, idx, w->u.button.state ? 1.0f : 0.0f);
-    }
-}
-
-void tabChanged(cuif_widget* w, float v) {
-    if (ReverbGui* g = guiOf(w)) {
-        bool adv = ((int)v == 1);
-        g->mainPage->visible = !adv;
-        g->advancedPage->visible = adv;
-    }
-}
-
-void bezierChanged(cuif_widget* w) {
-    ReverbGui* g = static_cast<ReverbGui*>(w->user_data);
-    if (!g) return;
-    static const int kIdx[3] = { kParamDecayLow, kParamDecayMid, kParamDecayHigh };
-    for (int i = 0; i < 3; ++i) {
-        sendParam(g, kIdx[i], widgetToParam(kIdx[i], 1.0f - w->u.bezier_editor.node_y[i]));
-    }
-}
-
-const ReverbWidgetRect& findRect(const std::vector<ReverbWidgetRect>& layout, const char* id) {
-    for (const auto& r : layout) {
-        if (std::strcmp(r.id, id) == 0) return r;
-    }
-    static const ReverbWidgetRect kEmpty = { "", ReverbLayoutGroup::Global, 0, 0, 0, 0 };
-    return kEmpty;
+void sendParams(void* context, const ParamUpdateMessage* msgs, size_t count) {
+    /* All-or-nothing; a dropped intermediate UI value is fine (see #107). */
+    static_cast<ReverbCore*>(context)->setParameterValues(msgs, count);
 }
 
 void syncFromCore(ReverbGui* g) {
-    for (int i = 0; i < kNumParams; ++i) {
-        if (g->knobs[i]) g->knobs[i]->u.knob.value = paramToWidget(i, g->core->getParameterValue(i));
-    }
-    g->freezeButton->u.button.state = g->core->getParameterValue(kParamFreeze) > 0.5f;
-    g->modeDropdown->u.dropdown.selected_index = (int)g->core->getParameterValue(kParamMode);
-    int theme = (int)g->core->getParameterValue(kParamUiTheme);
-    g->themeDropdown->u.dropdown.selected_index = theme;
-    cuif_set_theme(themeForUiThemeIndex(theme));
-    for (int i = 0; i < 3; ++i) {
-        static const int kIdx[3] = { kParamDecayLow, kParamDecayMid, kParamDecayHigh };
-        g->bezier->u.bezier_editor.node_y[i] = 1.0f - paramToWidget(kIdx[i], g->core->getParameterValue(kIdx[i]));
-    }
+    float params[kNumParams];
+    for (int i = 0; i < kNumParams; ++i) params[i] = g->core->getParameterValue(i);
+    reverbUiSyncFromParams(g->ui, params);
 }
 
 void destroyGui(ReverbGui* g) {
     if (!g) return;
-    if (g->root) cuif_widget_destroy(g->root);
+    if (g->window) cuif_window_set_root_widget(g->window, nullptr);
+    reverbUiDestroy(g->ui);
     /* Free the font BEFORE the window: its texture lives in the offscreen
      * window's GL context, which is still current here. After
      * cuif_window_destroy() that context is gone and glDeleteTextures()
@@ -260,76 +166,9 @@ bool guiOpen(lpi_plugin* p, float dpi, lpi_gui_offscreen_info* out) {
         }
     }
 
-    g->root = cuif_widget_create_container(0, 0, (float)kPanelW, (float)kPanelH);
-    g->root->user_data = g;
-    auto layout = computeReverbLayout((float)kPanelW, (float)kPanelH);
-
-    g->mainPage = cuif_widget_create_container(0, 0, (float)kPanelW, (float)kPanelH);
-    g->mainPage->user_data = g;
-    g->mainPage->visible = true;
-    cuif_widget_add_child(g->root, g->mainPage);
-    g->advancedPage = cuif_widget_create_container(0, 0, (float)kPanelW, (float)kPanelH);
-    g->advancedPage->user_data = g;
-    g->advancedPage->visible = false;
-    cuif_widget_add_child(g->root, g->advancedPage);
-
-    static const char* tabs[] = { "Main", "Advanced" };
-    static const char* modes[] = { "Room", "Hall", "Plate", "Cathedral", "Spring" };
-    static const char* themes[] = { "Default", "Hello Kitty", "Greens" };
-    { const auto& r = findRect(layout, "tabbar");
-      cuif_widget_add_child(g->root, cuif_widget_create_tabbar(r.x, r.y, r.w, r.h, tabs, 2, tabChanged)); }
-    { const auto& r = findRect(layout, "dropdown.mode");
-      g->modeDropdown = cuif_widget_create_dropdown(r.x, r.y, r.w, r.h, modes, 5, dropdownChanged);
-      g->modeDropdown->user_data = (void*)(intptr_t)kParamMode;
-      cuif_widget_add_child(g->root, g->modeDropdown); }
-    { const auto& r = findRect(layout, "dropdown.theme");
-      g->themeDropdown = cuif_widget_create_dropdown(r.x, r.y, r.w, r.h, themes, 3, themeChanged);
-      g->themeDropdown->user_data = (void*)(intptr_t)kParamUiTheme;
-      cuif_widget_add_child(g->root, g->themeDropdown); }
-    { const auto& r = findRect(layout, "button.freeze");
-      g->freezeButton = cuif_widget_create_button(r.x, r.y, r.w, r.h, "FREEZE", true, buttonClicked);
-      g->freezeButton->user_data = (void*)(intptr_t)kParamFreeze;
-      cuif_widget_add_child(g->root, g->freezeButton); }
-
-    auto addKnob = [&](cuif_widget* page, int idx, const char* id, const char* label) {
-        const auto& r = findRect(layout, id);
-        g->knobs[idx] = cuif_widget_create_knob(r.x, r.y, r.w, r.h, label,
-                                                paramToWidget(idx, kReverbParams[idx].defaultValue), knobChanged);
-        g->knobs[idx]->user_data = (void*)(intptr_t)idx;
-        cuif_widget_add_child(page, g->knobs[idx]);
-    };
-    addKnob(g->mainPage, kParamDecayTime, "knob.decayTime", "Decay Time");
-    addKnob(g->mainPage, kParamPreDelay, "knob.preDelay", "Pre-Delay");
-    addKnob(g->mainPage, kParamDamping, "knob.damping", "Damping");
-    addKnob(g->mainPage, kParamWidth, "knob.width", "Width");
-    addKnob(g->mainPage, kParamDryWet, "knob.dryWet", "Dry/Wet");
-    addKnob(g->mainPage, kParamDistance, "knob.distance", "Distance");
-    addKnob(g->mainPage, kParamThickness, "knob.thickness", "Thickness");
-
-    { const auto& r = findRect(layout, "bezier.decayEq");
-      g->bezier = cuif_widget_create_bezier_editor(r.x, r.y, r.w, r.h, 3, bezierChanged);
-      g->bezier->user_data = g;
-      g->bezier->u.bezier_editor.node_x[0] = 0.1f;
-      g->bezier->u.bezier_editor.node_x[1] = 0.5f;
-      g->bezier->u.bezier_editor.node_x[2] = 0.9f;
-      cuif_widget_add_child(g->mainPage, g->bezier); }
-    { const auto& r = findRect(layout, "analyzer.left");
-      cuif_widget_add_child(g->mainPage, cuif_widget_create_analyzer(r.x, r.y, r.w, r.h, g->leftSpectrum, 64, cuif_rgba(0.0f, 0.75f, 0.70f, 0.8f))); }
-    { const auto& r = findRect(layout, "analyzer.right");
-      cuif_widget_add_child(g->mainPage, cuif_widget_create_analyzer(r.x, r.y, r.w, r.h, g->rightSpectrum, 64, cuif_rgba(0.85f, 0.65f, 0.15f, 0.6f))); }
-
-    addKnob(g->advancedPage, kParamPostEqLowGain, "knob.postEqLowGain", "Low EQ");
-    addKnob(g->advancedPage, kParamPostEqMidGain, "knob.postEqMidGain", "Mid EQ");
-    addKnob(g->advancedPage, kParamPostEqHighGain, "knob.postEqHighGain", "High EQ");
-    addKnob(g->advancedPage, kParamCrossoverLowMid, "knob.crossoverLowMid", "Xover Low");
-    addKnob(g->advancedPage, kParamCrossoverMidHigh, "knob.crossoverMidHigh", "Xover High");
-    addKnob(g->advancedPage, kParamDuckThreshold, "knob.duckThreshold", "Duck Thresh");
-    addKnob(g->advancedPage, kParamDuckAmount, "knob.duckAmount", "Duck Depth");
-    addKnob(g->advancedPage, kParamDuckRelease, "knob.duckRelease", "Duck Rel");
-    addKnob(g->advancedPage, kParamGateThreshold, "knob.gateThreshold", "Gate Thresh");
-    addKnob(g->advancedPage, kParamGateTime, "knob.gateTime", "Gate Time");
-
-    cuif_window_set_root_widget(g->window, g->root);
+    g->ui = reverbUiCreate((float)kPanelW, (float)kPanelH, { &p->core, sendParams });
+    if (!g->ui) { destroyGui(g); return false; }
+    cuif_window_set_root_widget(g->window, g->ui->root);
     syncFromCore(g);
 
     g->physW = cuif_logical_to_physical_px(kPanelW, dpi);
@@ -352,8 +191,8 @@ void guiClose(lpi_plugin* p) {
 bool guiRender(lpi_plugin* p) {
     ReverbGui* g = p->gui;
     if (!g) return false;
-    if (p->core.isLeftAnalyzerFrameDirty()) p->core.getLeftAnalyzerMagnitudes(g->leftSpectrum);
-    if (p->core.isRightAnalyzerFrameDirty()) p->core.getRightAnalyzerMagnitudes(g->rightSpectrum);
+    if (p->core.isLeftAnalyzerFrameDirty()) p->core.getLeftAnalyzerMagnitudes(g->ui->leftSpectrum);
+    if (p->core.isRightAnalyzerFrameDirty()) p->core.getRightAnalyzerMagnitudes(g->ui->rightSpectrum);
     cuif_window_render_frame(g->window);
     return true;
 }

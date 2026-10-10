@@ -367,6 +367,16 @@ bool ReverbCore::setParameterValue(int index, float value) {
     return cuif_spsc_write(&paramUpdateRingBuffer, (const unsigned char*)&msg, sizeof(msg)) == sizeof(msg);
 }
 
+bool ReverbCore::setParameterValues(const ParamUpdateMessage* updates, size_t count) {
+    if (!updates) return count == 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (updates[i].index < 0 || updates[i].index >= kNumParams) return false;
+    }
+    size_t bytes = count * sizeof(ParamUpdateMessage);
+    if (cuif_spsc_writable(&paramUpdateRingBuffer) < bytes) return false;
+    return cuif_spsc_write(&paramUpdateRingBuffer, (const unsigned char*)updates, bytes) == bytes;
+}
+
 /*
  * State blob format v1 (all integers little-endian, as written on x86/x64):
  *

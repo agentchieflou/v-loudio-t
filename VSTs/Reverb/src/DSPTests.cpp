@@ -9,6 +9,7 @@
 #include "ReverbThemeMapping.h"
 #include "ReverbLayout.h"
 #include "ReverbCore.h"
+#include "ReverbUiMapping.h"
 #include <set>
 #include <cstring>
 #include <cstdint>
@@ -537,6 +538,82 @@ void testReverbCoreFreezeSustainsEnergy() {
     std::cout << "  Freeze mode sustains tail energy (" << tailEnergy << ") well after the input burst ends, and stays finite. Pass." << std::endl;
 }
 
+void testReverbUiMappingMatchesLegacyEditorTables() {
+    std::cout << "Running testReverbUiMappingMatchesLegacyEditorTables..." << std::endl;
+
+    /* The per-parameter widget->param table PluginEditor.cpp hardcoded
+     * before the shared ReverbUi, copied verbatim. The generic
+     * kReverbParams-driven mapping must reproduce it exactly, so moving the
+     * VST3 editor onto ReverbUi changes no knob's range. */
+    auto legacy = [](int index, float w) -> float {
+        switch (index) {
+            case kParamPreDelay: return w * 150.0f;
+            case kParamDecayTime: return 0.4f + w * 14.6f;
+            case kParamDamping: case kParamWidth: case kParamDryWet:
+            case kParamDistance: case kParamThickness: return w;
+            case kParamFreeze: return w > 0.5f ? 1.0f : 0.0f;
+            case kParamDecayLow: case kParamDecayMid: case kParamDecayHigh: return 0.1f + w * 1.9f;
+            case kParamCrossoverLowMid: return 100.0f + w * 900.0f;
+            case kParamCrossoverMidHigh: return 1000.0f + w * 9000.0f;
+            case kParamPostEqLowGain: case kParamPostEqMidGain: case kParamPostEqHighGain: return -12.0f + w * 24.0f;
+            case kParamDuckThreshold: return -60.0f + w * 60.0f;
+            case kParamDuckAmount: return w * 24.0f;
+            case kParamDuckRelease: return 10.0f + w * 990.0f;
+            case kParamGateThreshold: return -80.0f + w * 60.0f;
+            case kParamGateTime: return 10.0f + w * 490.0f;
+            default: return -12345.0f;
+        }
+    };
+
+    for (int i = 0; i < kNumParams; ++i) {
+        if (i == kParamMode || i == kParamUiTheme) continue; /* dropdowns: index, not mapped */
+        for (int step = 0; step <= 20; ++step) {
+            float w = step / 20.0f;
+            float got = reverbWidgetToParam(i, w);
+            float want = legacy(i, w);
+            assert(std::abs(got - want) <= 1e-4f * std::max(1.0f, std::abs(want)));
+            if (i != kParamFreeze) {
+                assert(std::abs(reverbParamToWidget(i, got) - w) < 1e-5f); /* round-trips */
+            }
+        }
+    }
+
+    std::cout << "  Generic kReverbParams mapping reproduces the legacy per-parameter editor tables. Pass." << std::endl;
+}
+
+void testReverbCoreSetParameterValuesIsAllOrNothing() {
+    std::cout << "Running testReverbCoreSetParameterValuesIsAllOrNothing..." << std::endl;
+
+    ReverbCore core;
+    core.prepare(44100.0, 64);
+    std::vector<float> l(64, 0.0f), r(64, 0.0f);
+
+    ParamUpdateMessage good[3] = { { kParamDecayLow, 0.5f }, { kParamDecayMid, 0.6f }, { kParamDecayHigh, 0.7f } };
+    assert(core.setParameterValues(good, 3));
+    core.process(l.data(), r.data(), 64);
+    assert(core.getParameterValue(kParamDecayLow) == 0.5f);
+    assert(core.getParameterValue(kParamDecayHigh) == 0.7f);
+
+    /* One bad index rejects the whole batch -- nothing enqueued. */
+    ParamUpdateMessage bad[2] = { { kParamDecayLow, 1.5f }, { kNumParams, 0.0f } };
+    assert(!core.setParameterValues(bad, 2));
+    core.process(l.data(), r.data(), 64);
+    assert(core.getParameterValue(kParamDecayLow) == 0.5f);
+
+    /* Fill the queue without draining, then a batch that doesn't fit whole
+     * must be refused rather than half-written. */
+    ParamUpdateMessage one = { kParamDamping, 0.1f };
+    int queued = 0;
+    while (core.setParameterValues(&one, 1)) ++queued;
+    assert(queued > 0);
+    assert(!core.setParameterValues(good, 3));
+    core.process(l.data(), r.data(), 64);
+    assert(core.getParameterValue(kParamDecayLow) == 0.5f); /* the refused batch never landed */
+    assert(core.getParameterValue(kParamDamping) == 0.1f);
+
+    std::cout << "  setParameterValues() enqueues a whole batch or nothing (bad index / full queue). Pass." << std::endl;
+}
+
 void testReverbCoreStateRoundTrip() {
     std::cout << "Running testReverbCoreStateRoundTrip..." << std::endl;
 
@@ -856,6 +933,8 @@ int main(int argc, char** argv) {
         testReverbCoreDryWetZeroIsExactPassthrough();
         testReverbCoreProcessStaysBoundedOnNoise();
         testReverbCoreFreezeSustainsEnergy();
+        testReverbUiMappingMatchesLegacyEditorTables();
+        testReverbCoreSetParameterValuesIsAllOrNothing();
         testReverbCoreStateRoundTrip();
         testReverbCoreStateIsKeyedById();
         testReverbCoreStateRejectsCorruptBlobsAtomically();
