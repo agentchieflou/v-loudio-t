@@ -76,7 +76,8 @@ std::vector<float> averageSpectrumDb(FlangerCore& core, int frames) {
     std::vector<double> power((size_t)n / 2, 0.0);
     unsigned seed = 77;
     for (int f = -2; f < frames; ++f) {
-        for (int i = 0; i < n; ++i) { l[(size_t)i] = noise(seed); r[(size_t)i] = l[(size_t)i]; }
+        /* -20 dBFS noise keeps the feedback path's soft clip transparent. */
+        for (int i = 0; i < n; ++i) { l[(size_t)i] = 0.1f * noise(seed); r[(size_t)i] = l[(size_t)i]; }
         core.process(l.data(), r.data(), n);
         if (f < 0) continue;
         for (int i = 0; i < n; ++i) {
@@ -110,6 +111,7 @@ void testFlangerCombNotches() {
      * former peaks, i.e. the comb's shape flips by ~3.4 dB. */
     FlangerCore inv = makeStatic(128.0f / 48.0f, -70.0f, 50.0f);
     std::vector<float> dbInv = averageSpectrumDb(inv, 64);
+    std::cout << "    negative-feedback flip: " << dbInv[16] - dbInv[32] << " dB (theory 3.4)" << std::endl;
     assert(dbInv[16] - dbInv[32] > 2.0f && dbInv[16] - dbInv[32] < 5.0f);
     std::cout << "  Static comb: notches at odd multiples of 187.5 Hz, >20 dB deep; negative feedback flips the comb's shape. Pass." << std::endl;
 }
