@@ -71,9 +71,28 @@ jobs:
         working-directory: build/abi/bin/Debug
         run: ./lpi_conformance.exe lpi_toy_gain.dll
 
-  reverb:
+  # One entry per VSTs/<Plugin> (tools/list_plugins.py), so a scaffolded
+  # plugin is tested from its first push and a deleted one vanishes from CI
+  # with no workflow edit (P4, #130).
+  plugins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: echo "list=$(python3 tools/list_plugins.py)" >> "$GITHUB_OUTPUT"
+
+  plugin:
+    needs: plugins
     runs-on: windows-latest
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJson(needs.plugins.outputs.list) }}
+    name: plugin (${{ matrix.plugin.name }})
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,34 +104,36 @@ jobs:
           Invoke-WebRequest $url -OutFile mesa.7z
           7z x mesa.7z -omesa | Out-Null
       - name: Configure
-        run: cmake -S VSTs/Reverb -B build/reverb
+        run: cmake -S VSTs/${{ matrix.plugin.name }} -B build/plugin
       - name: Build tests + LPI plugin
-        run: cmake --build build/reverb --config Debug --target dsp_tests lpi_reverb lpi_reverb_gui_harness lpi_conformance
+        run: cmake --build build/plugin --config Debug --target dsp_tests lpi_${{ matrix.plugin.lower }} lpi_${{ matrix.plugin.lower }}_gui_harness lpi_conformance
       - name: dsp_tests
-        working-directory: build/reverb/Debug
+        working-directory: build/plugin/Debug
         run: ./dsp_tests.exe
       - name: Install Mesa next to LPI GUI harness
         shell: pwsh
-        run: Copy-Item mesa/x64/*.dll build/reverb/bin/Debug/
-      - name: lpi_reverb_gui_harness
-        working-directory: build/reverb/bin/Debug
-        run: ./lpi_reverb_gui_harness.exe
-      - name: lpi_conformance (reverb)
-        working-directory: build/reverb/bin/Debug
-        run: ./lpi_conformance.exe lpi_reverb.dll
+        run: Copy-Item mesa/x64/*.dll build/plugin/bin/Debug/
+      - name: LPI GUI harness
+        working-directory: build/plugin/bin/Debug
+        run: ./lpi_${{ matrix.plugin.lower }}_gui_harness.exe
+      - name: lpi_conformance
+        working-directory: build/plugin/bin/Debug
+        run: ./lpi_conformance.exe lpi_${{ matrix.plugin.lower }}.dll
       - name: Upload LPI GUI frames
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: lpi-reverb-frames
-          path: build/reverb/bin/Debug/*.ppm
+          name: lpi-${{ matrix.plugin.lower }}-frames
+          path: build/plugin/bin/Debug/*.ppm
           if-no-files-found: ignore
       - name: Build VST3 + Standalone
-        run: cmake --build build/reverb --config Debug --target LoudioReverb_VST3 LoudioReverb_Standalone
+        run: cmake --build build/plugin --config Debug --target Loudio${{ matrix.plugin.name }}_VST3 Loudio${{ matrix.plugin.name }}_Standalone
 
   # Fast, GPU-free, JUCE-free DSP feedback: the shared DSP component tests
-  # and the Reverb DSP tests (which need neither Windows nor JUCE) in ~30 s.
+  # and every plugin's DSP tests (which need neither Windows nor JUCE) in
+  # well under a minute.
   dsp-linux:
+    needs: plugins
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -123,9 +144,15 @@ jobs:
         run: cmake --build build/dsp
       - name: loudio_dsp_tests
         run: ./build/dsp/loudio_dsp_tests
-      - name: Configure Reverb DSP tests (no JUCE)
-        run: cmake -S VSTs/Reverb -B build/reverb-tests -DCMAKE_BUILD_TYPE=Debug -DLOUDIO_REVERB_TESTS_ONLY=ON
-      - name: Build dsp_tests
-        run: cmake --build build/reverb-tests --target dsp_tests
-      - name: dsp_tests
-        run: ./build/reverb-tests/dsp_tests
+      - name: Plugin DSP tests (no JUCE)
+        env:
+          PLUGINS: ${{ needs.plugins.outputs.list }}
+        run: |
+          set -e
+          for name in $(echo "$PLUGINS" | python3 -c 'import json,sys; print(" ".join(p["name"] for p in json.load(sys.stdin)))'); do
+            echo "::group::$name"
+            cmake -S "VSTs/$name" -B "build/$name-tests" -DCMAKE_BUILD_TYPE=Debug -DLOUDIO_PLUGIN_TESTS_ONLY=ON
+            cmake --build "build/$name-tests" --target dsp_tests
+            "./build/$name-tests/dsp_tests"
+            echo "::endgroup::"
+          done
