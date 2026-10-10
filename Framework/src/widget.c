@@ -317,6 +317,119 @@ static void draw_graph_frame(const cuif_widget* w, const cuif_theme* theme, int 
     }
 }
 
+/* ---- Readout + keyboard (#131) ---- */
+
+static void readout_format(const cuif_widget* w, char* out, size_t out_size) {
+    char fmt[16];
+    int d = w->u.readout.decimals;
+    if (d < 0) d = 0;
+    if (d > 6) d = 6;
+    snprintf(fmt, sizeof(fmt), "%%.%df%%s", d);
+    snprintf(out, out_size, fmt, w->u.readout.value, w->u.readout.unit);
+}
+
+cuif_widget* cuif_widget_create_readout(float x, float y, float w, float h, float min_value, float max_value,
+                                        int decimals, const char* unit, cuif_widget_value_changed_fn on_commit) {
+    cuif_widget* widget = cuif_widget_create_base(CUIF_WIDGET_READOUT, x, y, w, h);
+    if (!widget) return NULL;
+    if (max_value < min_value) { float t = min_value; min_value = max_value; max_value = t; }
+    widget->u.readout.min_value = min_value;
+    widget->u.readout.max_value = max_value;
+    widget->u.readout.value = clampf(0.0f, min_value, max_value);
+    widget->u.readout.decimals = decimals;
+    if (unit) strncpy(widget->u.readout.unit, unit, sizeof(widget->u.readout.unit) - 1);
+    widget->u.readout.editing = false;
+    widget->u.readout.text[0] = '\0';
+    widget->u.readout.text_len = 0;
+    widget->u.readout.on_commit = on_commit;
+    return widget;
+}
+
+void cuif_widget_readout_set_value(cuif_widget* w, float value) {
+    if (!w || w->type != CUIF_WIDGET_READOUT || w->u.readout.editing) return;
+    w->u.readout.value = clampf(value, w->u.readout.min_value, w->u.readout.max_value);
+}
+
+void cuif_widget_readout_text(const cuif_widget* w, char* out, size_t out_size) {
+    if (!w || !out || out_size == 0) return;
+    if (w->type != CUIF_WIDGET_READOUT) { out[0] = '\0'; return; }
+    if (w->u.readout.editing) {
+        strncpy(out, w->u.readout.text, out_size - 1);
+        out[out_size - 1] = '\0';
+    } else {
+        readout_format(w, out, out_size);
+    }
+}
+
+static void readout_begin_edit(cuif_widget* w) {
+    char fmt[16];
+    int d = w->u.readout.decimals < 0 ? 0 : (w->u.readout.decimals > 6 ? 6 : w->u.readout.decimals);
+    snprintf(fmt, sizeof(fmt), "%%.%df", d);
+    snprintf(w->u.readout.text, sizeof(w->u.readout.text), fmt, w->u.readout.value);
+    w->u.readout.text_len = (int)strlen(w->u.readout.text);
+    w->u.readout.editing = true;
+    if (cuif_current_window) cuif_window_set_focused_widget(cuif_current_window, w);
+}
+
+static void readout_end_edit(cuif_widget* w, bool commit) {
+    if (!w->u.readout.editing) return;
+    w->u.readout.editing = false;
+    if (commit && w->u.readout.text_len > 0) {
+        char* end = NULL;
+        float v = strtof(w->u.readout.text, &end);
+        if (end != w->u.readout.text) {
+            v = clampf(v, w->u.readout.min_value, w->u.readout.max_value);
+            w->u.readout.value = v;
+            if (w->u.readout.on_commit) w->u.readout.on_commit(w, v);
+        }
+    }
+    w->u.readout.text[0] = '\0';
+    w->u.readout.text_len = 0;
+    if (cuif_current_window && cuif_window_get_focused_widget(cuif_current_window) == w) {
+        cuif_window_set_focused_widget(cuif_current_window, NULL);
+    }
+}
+
+void cuif_widget_cancel_text_entry(void) {
+    if (!cuif_current_window) return;
+    cuif_widget* f = cuif_window_get_focused_widget(cuif_current_window);
+    if (f && f->type == CUIF_WIDGET_READOUT) readout_end_edit(f, false);
+    cuif_window_set_focused_widget(cuif_current_window, NULL);
+}
+
+bool cuif_widget_dispatch_key(cuif_widget* root, int type, uint32_t key, uint32_t modifiers) {
+    (void)root;
+    (void)modifiers;
+    if (!cuif_current_window) return false;
+    cuif_widget* w = cuif_window_get_focused_widget(cuif_current_window);
+    if (!w || w->type != CUIF_WIDGET_READOUT || !w->u.readout.editing) return false;
+
+    if (type == CUIF_KEY_DOWN) {
+        switch (key) {
+            case CUIF_VK_ENTER:  readout_end_edit(w, true);  return true;
+            case CUIF_VK_ESCAPE: readout_end_edit(w, false); return true;
+            case CUIF_VK_BACKSPACE:
+                if (w->u.readout.text_len > 0) w->u.readout.text[--w->u.readout.text_len] = '\0';
+                return true;
+            default:
+                return true; /* other keys are swallowed while editing */
+        }
+    }
+    if (type == CUIF_KEY_CHAR) {
+        char c = 0;
+        if (key >= '0' && key <= '9') c = (char)key;
+        else if (key == '-' || key == '+' || key == '.') c = (char)key;
+        else if (key == ',') c = '.';
+        if (c == 0) return true; /* rejected character */
+        if (w->u.readout.text_len < CUIF_READOUT_TEXT_MAX - 1) {
+            w->u.readout.text[w->u.readout.text_len++] = c;
+            w->u.readout.text[w->u.readout.text_len] = '\0';
+        }
+        return true;
+    }
+    return type == CUIF_KEY_UP;
+}
+
 /* Double-click detection state (see widget.h). One UI thread, so plain statics. */
 static cuif_widget* s_last_click_widget = NULL;
 static unsigned long long s_last_click_time_ms = 0;
@@ -348,6 +461,9 @@ static bool register_click(cuif_widget* hit, float mx, float my) {
 
 void cuif_widget_destroy(cuif_widget* w) {
     if (!w) return;
+    if (cuif_current_window && cuif_window_get_focused_widget(cuif_current_window) == w) {
+        cuif_window_set_focused_widget(cuif_current_window, NULL);
+    }
     for (int i = 0; i < w->child_count; ++i) {
         cuif_widget_destroy(w->children[i]);
     }
@@ -833,6 +949,20 @@ void cuif_widget_render(cuif_widget* w) {
             }
             break;
         }
+
+        case CUIF_WIDGET_READOUT: {
+            bool editing = w->u.readout.editing;
+            cuif_draw_rounded_rect(w->x, w->y, w->w, w->h, 3.0f, editing ? theme_bg_dark : theme_panel_bg, true);
+            cuif_draw_rounded_rect(w->x, w->y, w->w, w->h, 3.0f, editing ? theme_primary : theme_border, false);
+            if (cuif_global_font) {
+                char text[CUIF_READOUT_TEXT_MAX + 8];
+                cuif_widget_readout_text(w, text, sizeof(text));
+                if (editing) strncat(text, "_", sizeof(text) - strlen(text) - 1); /* caret */
+                float tx = w->x + w->w * 0.5f - cuif_font_measure_text(cuif_global_font, text) * 0.5f;
+                cuif_draw_text(cuif_global_font, text, tx, w->y + w->h * 0.5f + 5.0f, text_white);
+            }
+            break;
+        }
     }
 
     /* Render children */
@@ -878,6 +1008,12 @@ void cuif_widget_dispatch_mouse_down(cuif_widget* root, float mx, float my, int 
     }
 
     cuif_widget* hit = hit_test(root, mx, my);
+
+    /* A click anywhere but the readout being edited cancels its entry. */
+    {
+        cuif_widget* focused = cuif_window_get_focused_widget(cuif_current_window);
+        if (focused && focused != hit) cuif_widget_cancel_text_entry();
+    }
     if (!hit) return;
 
     cuif_window_set_active_widget(cuif_current_window, hit);
@@ -979,6 +1115,11 @@ void cuif_widget_dispatch_mouse_down(cuif_widget* root, float mx, float my, int 
         case CUIF_WIDGET_EQ_CURVE:
             hit->u.eq_curve.active_band = eq_band_at(hit, mx, my);
             if (hit->u.eq_curve.active_band < 0) cuif_window_set_active_widget(cuif_current_window, NULL);
+            break;
+
+        case CUIF_WIDGET_READOUT:
+            if (!hit->u.readout.editing) readout_begin_edit(hit);
+            cuif_window_set_active_widget(cuif_current_window, NULL);
             break;
 
         default:

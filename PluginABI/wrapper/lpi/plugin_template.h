@@ -31,9 +31,11 @@
  * The UI calls sendParams(context, updates, count) for every edit, with
  * related edits batched; the wrapper forwards them to the core
  * (all-or-nothing) and queues lpi.params.changes.v1 entries for the ones
- * the core accepted. The wrapper reports Core::latencySamples() through
- * lpi.latency.v1 when the core has it, 0 otherwise, and advertises
- * lpi.transport.v1 only when the core has
+ * the core accepted. Keyboard input (lpi.gui.keyboard.v1) is relayed to
+ * the cuif window; a readout commit is reported as a one-shot gesture
+ * (GESTURE_BEGIN|GESTURE_END on the same entry). The wrapper reports
+ * Core::latencySamples() through lpi.latency.v1 when the core has it, 0
+ * otherwise, and advertises lpi.transport.v1 only when the core has
  * setTransport(const loudio::TransportInfo&).
  *
  * Threading: audio thread -> process(). One "GUI thread" -> all of the
@@ -67,6 +69,12 @@ static_assert((uint32_t)loudio::kTransportPlaying == (uint32_t)LPI_TRANSPORT_PLA
 static_assert((uint32_t)loudio::kTransportLooping == (uint32_t)LPI_TRANSPORT_LOOPING, "loudio::TransportFlags must mirror LPI_TRANSPORT_*");
 static_assert((uint32_t)loudio::kTransportTempoValid == (uint32_t)LPI_TRANSPORT_TEMPO_VALID, "loudio::TransportFlags must mirror LPI_TRANSPORT_*");
 static_assert((uint32_t)loudio::kTransportPpqValid == (uint32_t)LPI_TRANSPORT_PPQ_VALID, "loudio::TransportFlags must mirror LPI_TRANSPORT_*");
+static_assert((int)CUIF_KEY_DOWN == (int)LPI_KEY_DOWN && (int)CUIF_KEY_UP == (int)LPI_KEY_UP && (int)CUIF_KEY_CHAR == (int)LPI_KEY_CHAR, "cuif key event types must mirror LPI_KEY_*");
+static_assert((int)CUIF_MOD_SHIFT == (int)LPI_MOD_SHIFT && (int)CUIF_MOD_CTRL == (int)LPI_MOD_CTRL && (int)CUIF_MOD_ALT == (int)LPI_MOD_ALT && (int)CUIF_MOD_META == (int)LPI_MOD_META, "cuif modifiers must mirror LPI_MOD_*");
+static_assert((int)CUIF_VK_ENTER == (int)LPI_VK_ENTER && (int)CUIF_VK_ESCAPE == (int)LPI_VK_ESCAPE && (int)CUIF_VK_BACKSPACE == (int)LPI_VK_BACKSPACE && (int)CUIF_VK_TAB == (int)LPI_VK_TAB
+              && (int)CUIF_VK_DELETE == (int)LPI_VK_DELETE && (int)CUIF_VK_HOME == (int)LPI_VK_HOME && (int)CUIF_VK_END == (int)LPI_VK_END && (int)CUIF_VK_LEFT == (int)LPI_VK_LEFT
+              && (int)CUIF_VK_RIGHT == (int)LPI_VK_RIGHT && (int)CUIF_VK_UP == (int)LPI_VK_UP && (int)CUIF_VK_DOWN == (int)LPI_VK_DOWN && (int)CUIF_VK_MINUS == (int)LPI_VK_MINUS
+              && (int)CUIF_VK_PERIOD == (int)LPI_VK_PERIOD && (int)CUIF_VK_COMMA == (int)LPI_VK_COMMA && (int)CUIF_VK_SPACE == (int)LPI_VK_SPACE, "cuif virtual keys must mirror LPI_VK_*");
 
 namespace loudio {
 namespace lpi {
@@ -317,6 +325,7 @@ struct Api {
 
     static void guiClose(lpi_plugin* plugin) {
         Inst* p = self(plugin);
+        if (p->gui) cuif_window_set_keyboard_focus(p->gui->window, false); /* ends any text entry */
         endGesture(p); /* closing mid-drag still releases the gesture */
         GuiT::destroy(p->gui);
         p->gui = nullptr;
@@ -359,6 +368,30 @@ struct Api {
         }
     }
 
+    /* ---- lpi.gui.keyboard.v1 ---- */
+
+    static void keyEvent(lpi_plugin* plugin, int type, uint32_t key, uint32_t modifiers) {
+        if (!plugin) return;
+        Inst* p = self(plugin);
+        GuiT* g = p->gui;
+        if (!g) return;
+        /* A key may commit a value (Enter in a readout): report it as a
+         * complete gesture, like a double-click reset. */
+        beginGesture(p);
+        cuif_window_inject_key(g->window, type, key, modifiers);
+        endGesture(p);
+    }
+
+    static void keyFocus(lpi_plugin* plugin, bool focused) {
+        if (!plugin) return;
+        Inst* p = self(plugin);
+        GuiT* g = p->gui;
+        if (!g) return;
+        beginGesture(p); /* blur only cancels; nothing commits, so the gesture stays empty */
+        cuif_window_set_keyboard_focus(g->window, focused);
+        endGesture(p);
+    }
+
     /* ---- lpi.latency.v1 ---- */
 
     static uint32_t latencyGet(lpi_plugin* plugin) { return coreLatency(self(plugin)->core); }
@@ -396,6 +429,7 @@ struct Api {
     static void* getExtension(lpi_plugin*, const char* id) {
         if (!id) return nullptr;
         if (std::strcmp(id, LPI_EXT_GUI_OFFSCREEN_V1) == 0) return (void*)&kGuiExt;
+        if (std::strcmp(id, LPI_EXT_GUI_KEYBOARD_V1) == 0) return (void*)&kKeyboardExt;
         if (std::strcmp(id, LPI_EXT_LATENCY_V1) == 0) return (void*)&kLatencyExt;
         if (std::strcmp(id, LPI_EXT_PARAM_CHANGES_V1) == 0) return (void*)&kParamChangesExt;
         if (std::strcmp(id, LPI_EXT_TRANSPORT_V1) == 0) return coreHasTransport<Core>() ? (void*)&kTransportExt : nullptr;
@@ -407,6 +441,7 @@ struct Api {
     static const lpi_plugin_factory* factory() { return &kFactory; }
 
     static inline const lpi_gui_offscreen_v1 kGuiExt = { guiOpen, guiClose, guiRender, guiReadPixels, guiMouse };
+    static inline const lpi_gui_keyboard_v1 kKeyboardExt = { keyEvent, keyFocus };
     static inline const lpi_latency_v1 kLatencyExt = { latencyGet };
     static inline const lpi_param_changes_v1 kParamChangesExt = { paramChangesGet };
     static inline const lpi_transport_v1 kTransportExt = { transportSet };

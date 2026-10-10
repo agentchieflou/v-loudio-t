@@ -147,12 +147,16 @@ int main(int argc, char** argv) {
     cuif_widget_add_child(root, transfer);
     static float eq_response[64];
     for (int i = 0; i < 64; ++i) eq_response[i] = 8.0f * sinf((float)i / 63.0f * 6.2831853f);
-    cuif_widget* eq = cuif_widget_create_eq_curve(20.0f, 170.0f, (float)logical_w - 40.0f, 100.0f, 3, 20.0f, 20000.0f, -24.0f, 24.0f, NULL);
+    cuif_widget* eq = cuif_widget_create_eq_curve(20.0f, 185.0f, (float)logical_w - 40.0f, 100.0f, 3, 20.0f, 20000.0f, -24.0f, 24.0f, NULL);
     cuif_widget_eq_curve_set_band(eq, 0, 100.0f, 6.0f, 1.0f, true);
     cuif_widget_eq_curve_set_band(eq, 1, 1000.0f, -8.0f, 2.0f, true);
     cuif_widget_eq_curve_set_band(eq, 2, 8000.0f, 3.0f, 0.7f, true);
     cuif_widget_eq_curve_set_response(eq, eq_response, 64);
     cuif_widget_add_child(root, eq);
+    /* A readout under the knob; the second frame shows it mid-edit. */
+    cuif_widget* readout = cuif_widget_create_readout(100.0f, 158.0f, 90.0f, 22.0f, 0.0f, 15.0f, 2, " s", NULL);
+    cuif_widget_readout_set_value(readout, 2.0f);
+    cuif_widget_add_child(root, readout);
 
     int physical_w = (int)(logical_w * dpi_scale);
     int physical_h = (int)(logical_h * dpi_scale);
@@ -179,6 +183,17 @@ int main(int argc, char** argv) {
     cuif_window_inject_mouse_up(win, knob_cx, knob_cy - 60.0f, 0);
 
     printf("Injected a synthetic drag (mouse down + 20 move steps + up) on the knob.\n");
+
+    /* Click the readout and type a partial value so frame 2 renders the
+     * edit state (caret, highlighted border); then commit it. */
+    cuif_window_set_keyboard_focus(win, true);
+    cuif_window_inject_mouse_down(win, 145.0f, 169.0f, 0);
+    cuif_window_inject_mouse_up(win, 145.0f, 169.0f, 0);
+    for (int i = 0; i < 8; ++i) cuif_window_inject_key(win, CUIF_KEY_DOWN, CUIF_VK_BACKSPACE, 0);
+    cuif_window_inject_key(win, CUIF_KEY_CHAR, (uint32_t)'4', 0);
+    cuif_window_inject_key(win, CUIF_KEY_CHAR, (uint32_t)'.', 0);
+    cuif_window_inject_key(win, CUIF_KEY_CHAR, (uint32_t)'5', 0);
+    printf("Injected a click + typed \"4.5\" into the readout (left mid-edit for frame 2).\n");
 
     char path2[512];
     snprintf(path2, sizeof(path2), "%s\\offscreen_frame2_after_drag.bmp", out_dir);

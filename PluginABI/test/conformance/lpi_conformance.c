@@ -245,6 +245,24 @@ int main(int argc, char** argv) {
             EXPECT(!gui->read_pixels(inst, px, bytes - 1), "gui read_pixels rejects undersized buffer");
             gui->mouse_event(inst, LPI_MOUSE_MOVE, 1.0f, 1.0f);
             EXPECT(gui->render(inst), "gui render after input");
+            const lpi_gui_keyboard_v1* kb = (const lpi_gui_keyboard_v1*)api->get_extension(inst, LPI_EXT_GUI_KEYBOARD_V1);
+            if (kb) {
+                if (round == 0) printf("  %s: present\n", LPI_EXT_GUI_KEYBOARD_V1);
+                EXPECT(kb->key_event && kb->focus, "keyboard function pointers present");
+                if (kb->key_event && kb->focus) {
+                    /* Keys with and without focus, a CHAR, a modifier, and
+                     * blur must all be accepted and leave rendering working. */
+                    kb->focus(inst, true);
+                    kb->key_event(inst, LPI_KEY_DOWN, LPI_VK_A, 0);
+                    kb->key_event(inst, LPI_KEY_CHAR, (uint32_t)'a', 0);
+                    kb->key_event(inst, LPI_KEY_UP, LPI_VK_A, 0);
+                    kb->key_event(inst, LPI_KEY_DOWN, LPI_VK_ESCAPE, LPI_MOD_SHIFT);
+                    kb->key_event(inst, LPI_KEY_UP, LPI_VK_ESCAPE, LPI_MOD_SHIFT);
+                    kb->focus(inst, false);
+                    kb->key_event(inst, LPI_KEY_DOWN, LPI_VK_ENTER, 0); /* unfocused: ignored */
+                    EXPECT(gui->render(inst), "gui render after keyboard input");
+                }
+            }
             free(px);
             gui->close(inst);
         }
