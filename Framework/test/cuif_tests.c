@@ -325,6 +325,111 @@ static void testEqCurveHandlesDragWheelAndMapping(void) {
     printf("  EQ handles map log-frequency/dB, drag with clamping, wheel scales Q, misses do nothing. Pass.\n");
 }
 
+static float g_readout_committed = -999.0f;
+static int g_readout_commit_calls = 0;
+static void readoutCommitted(cuif_widget* w, float value) {
+    (void)w;
+    g_readout_committed = value;
+    g_readout_commit_calls++;
+}
+
+static void typeString(cuif_widget* root, const char* text) {
+    for (const char* c = text; *c; ++c) {
+        uint32_t vk = (*c >= '0' && *c <= '9') ? (uint32_t)*c : (*c == '-' ? CUIF_VK_MINUS : (*c == '.' ? CUIF_VK_PERIOD : CUIF_VK_COMMA));
+        cuif_widget_dispatch_key(root, CUIF_KEY_DOWN, vk, 0);
+        cuif_widget_dispatch_key(root, CUIF_KEY_CHAR, (uint32_t)*c, 0);
+        cuif_widget_dispatch_key(root, CUIF_KEY_UP, vk, 0);
+    }
+}
+
+/* Needs the live test window: focus lives on the cuif_window. */
+static void testReadoutClickToTypeCommitCancelAndClamp(void) {
+    printf("Running testReadoutClickToTypeCommitCancelAndClamp...\n");
+
+    cuif_widget* root = cuif_widget_create_container(0.0f, 0.0f, 400.0f, 300.0f);
+    cuif_widget* ro = cuif_widget_create_readout(10.0f, 10.0f, 80.0f, 24.0f, -24.0f, 24.0f, 1, " dB", readoutCommitted);
+    cuif_widget* knob = cuif_widget_create_knob(200.0f, 100.0f, 100.0f, 100.0f, "K", 0.5f, knobChangedCallback);
+    cuif_widget_add_child(root, ro);
+    cuif_widget_add_child(root, knob);
+    cuif_window_set_root_widget(g_test_window, root);
+    cuif_window_render_frame(g_test_window); /* establishes cuif_current_window */
+
+    char text[32];
+    cuif_widget_readout_set_value(ro, 3.0f);
+    cuif_widget_readout_text(ro, text, sizeof(text));
+    assert(strcmp(text, "3.0 dB") == 0);
+
+    /* Keys without focus are ignored. */
+    g_readout_commit_calls = 0;
+    assert(!cuif_widget_dispatch_key(root, CUIF_KEY_DOWN, CUIF_VK_ENTER, 0));
+    assert(!ro->u.readout.editing);
+
+    /* Click: enters editing with the current value as text; typing edits it. */
+    cuif_widget_dispatch_mouse_down(root, 50.0f, 22.0f, 0);
+    cuif_widget_dispatch_mouse_up(root, 50.0f, 22.0f, 0);
+    assert(ro->u.readout.editing && cuif_window_get_focused_widget(g_test_window) == ro);
+    cuif_widget_readout_text(ro, text, sizeof(text));
+    assert(strcmp(text, "3.0") == 0);
+    for (int i = 0; i < 3; ++i) assert(cuif_widget_dispatch_key(root, CUIF_KEY_DOWN, CUIF_VK_BACKSPACE, 0));
+    cuif_widget_readout_text(ro, text, sizeof(text));
+    assert(strcmp(text, "") == 0);
+    typeString(root, "-7,25");
+    cuif_widget_readout_text(ro, text, sizeof(text));
+    assert(strcmp(text, "-7.25") == 0); /* comma reads as a decimal point */
+    /* Letters and other characters are rejected; host values can't overwrite the draft. */
+    cuif_widget_dispatch_key(root, CUIF_KEY_CHAR, (uint32_t)'x', 0);
+    cuif_widget_readout_set_value(ro, 20.0f);
+    cuif_widget_readout_text(ro, text, sizeof(text));
+    assert(strcmp(text, "-7.25") == 0);
+
+    /* Enter commits: parsed, on_commit fired, focus released, display updated. */
+    assert(cuif_widget_dispatch_key(root, CUIF_KEY_DOWN, CUIF_VK_ENTER, 0));
+    assert(!ro->u.readout.editing && cuif_window_get_focused_widget(g_test_window) == NULL);
+    assert(g_readout_commit_calls == 1 && fabsf(g_readout_committed - (-7.25f)) < 1e-5f);
+    cuif_widget_readout_text(ro, text, sizeof(text));
+    assert(strcmp(text, "-7.2 dB") == 0 || strcmp(text, "-7.3 dB") == 0);
+
+    /* Escape cancels. */
+    cuif_widget_dispatch_mouse_down(root, 50.0f, 22.0f, 0);
+    cuif_widget_dispatch_mouse_up(root, 50.0f, 22.0f, 0);
+    typeString(root, "5");
+    cuif_widget_dispatch_key(root, CUIF_KEY_DOWN, CUIF_VK_ESCAPE, 0);
+    assert(!ro->u.readout.editing && g_readout_commit_calls == 1);
+    assert(fabsf(ro->u.readout.value - (-7.25f)) < 1e-5f);
+
+    /* Out-of-range commits clamp. */
+    cuif_widget_dispatch_mouse_down(root, 50.0f, 22.0f, 0);
+    for (int i = 0; i < 8; ++i) cuif_widget_dispatch_key(root, CUIF_KEY_DOWN, CUIF_VK_BACKSPACE, 0);
+    typeString(root, "999");
+    cuif_widget_dispatch_key(root, CUIF_KEY_DOWN, CUIF_VK_ENTER, 0);
+    assert(g_readout_commit_calls == 2 && g_readout_committed == 24.0f);
+
+    /* A click elsewhere cancels without committing; the click still reaches its target. */
+    cuif_widget_dispatch_mouse_down(root, 50.0f, 22.0f, 0);
+    typeString(root, "1");
+    g_knob_change_calls = 0;
+    cuif_widget_dispatch_mouse_down(root, 250.0f, 150.0f, 0); /* knob */
+    assert(!ro->u.readout.editing && g_readout_commit_calls == 2 && knob->u.knob.dragging);
+    cuif_widget_dispatch_mouse_up(root, 250.0f, 150.0f, 0);
+
+    /* Window-level focus loss cancels too. */
+    cuif_widget_dispatch_mouse_down(root, 50.0f, 22.0f, 0);
+    cuif_widget_dispatch_mouse_up(root, 50.0f, 22.0f, 0);
+    assert(ro->u.readout.editing);
+    cuif_window_set_keyboard_focus(g_test_window, false);
+    assert(!ro->u.readout.editing && cuif_window_get_focused_widget(g_test_window) == NULL);
+    assert(g_readout_commit_calls == 2);
+
+    /* Destroying the focused widget clears the focus pointer. */
+    cuif_widget_dispatch_mouse_down(root, 50.0f, 22.0f, 0);
+    assert(cuif_window_get_focused_widget(g_test_window) == ro);
+    cuif_window_set_root_widget(g_test_window, NULL);
+    cuif_widget_destroy(root);
+    assert(cuif_window_get_focused_widget(g_test_window) == NULL);
+
+    printf("  Readout: click to edit, digits/-/./, edit, Enter commits (clamped), Escape/click-away/blur cancel. Pass.\n");
+}
+
 static void setUpTestWindow(void) {
     cuif_window_desc desc = { 0 };
     desc.title = "cuif_tests (hidden)";
@@ -867,6 +972,7 @@ int main(void) {
     testMeterBallisticsRiseInstantlyFallAtRateAndHoldPeak();
     testTransferCurveMatchesGainComputerFormula();
     testEqCurveHandlesDragWheelAndMapping();
+    testReadoutClickToTypeCommitCancelAndClamp();
 
     testDefaultThemeIsActiveInitially();
     testSetThemeChangesActiveTheme();

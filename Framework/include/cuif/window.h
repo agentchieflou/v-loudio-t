@@ -100,6 +100,13 @@ void cuif_window_inject_mouse_up(cuif_window* window, float logical_x, float log
 void cuif_window_inject_mouse_move(cuif_window* window, float logical_x, float logical_y, int button);
 /* delta_notches: +1 per wheel notch away from the user (see cuif_widget_dispatch_mouse_wheel). */
 void cuif_window_inject_mouse_wheel(cuif_window* window, float logical_x, float logical_y, float delta_notches);
+/* Keyboard (#131): type/key/modifiers per cuif/keys.h; the same path the
+ * real WM_KEYDOWN/WM_KEYUP/WM_CHAR handlers take. */
+void cuif_window_inject_key(cuif_window* window, int type, uint32_t key, uint32_t modifiers);
+/* Keyboard focus gained/lost at the window level (a host's canvas focus,
+ * WM_SETFOCUS/WM_KILLFOCUS). Losing it cancels any text entry. */
+void cuif_window_set_keyboard_focus(cuif_window* window, bool focused);
+bool cuif_window_has_keyboard_focus(cuif_window* window);
 
 void cuif_window_destroy(cuif_window* window);
 
@@ -139,6 +146,9 @@ struct cuif_widget* cuif_window_get_hovered_widget(cuif_window* w);
 void cuif_window_set_hovered_widget(cuif_window* w, struct cuif_widget* widget);
 struct cuif_widget* cuif_window_get_open_dropdown(cuif_window* w);
 void cuif_window_set_open_dropdown(cuif_window* w, struct cuif_widget* widget);
+/* The widget receiving keyboard events (a readout being edited), or NULL. */
+struct cuif_widget* cuif_window_get_focused_widget(cuif_window* w);
+void cuif_window_set_focused_widget(cuif_window* w, struct cuif_widget* widget);
 
 extern cuif_window* cuif_current_window;
 

@@ -34,6 +34,8 @@ struct cuif_window {
     struct cuif_widget* active_widget;
     struct cuif_widget* hovered_widget;
     struct cuif_widget* open_dropdown;
+    struct cuif_widget* focused_widget; /* keyboard target (#131) */
+    bool keyboard_focus;
 
     /* Offscreen rendering (#99/B2) -- see cuif_window_create_offscreen(). */
     bool offscreen;
@@ -46,6 +48,39 @@ static int cuif_window_count = 0;
 static bool cuif_class_registered = false;
 
 static const wchar_t* CUIF_WNDCLASS_NAME = L"cuif_window_class";
+
+/* Win32 virtual key -> cuif/keys.h. Letters and digits share ASCII codes. */
+static uint32_t cuif_vk_from_win32(unsigned vk) {
+    if (vk >= '0' && vk <= '9') return vk;
+    if (vk >= 'A' && vk <= 'Z') return vk;
+    switch (vk) {
+        case VK_SPACE:  return CUIF_VK_SPACE;
+        case VK_RETURN: return CUIF_VK_ENTER;
+        case VK_ESCAPE: return CUIF_VK_ESCAPE;
+        case VK_BACK:   return CUIF_VK_BACKSPACE;
+        case VK_TAB:    return CUIF_VK_TAB;
+        case VK_DELETE: return CUIF_VK_DELETE;
+        case VK_HOME:   return CUIF_VK_HOME;
+        case VK_END:    return CUIF_VK_END;
+        case VK_LEFT:   return CUIF_VK_LEFT;
+        case VK_RIGHT:  return CUIF_VK_RIGHT;
+        case VK_UP:     return CUIF_VK_UP;
+        case VK_DOWN:   return CUIF_VK_DOWN;
+        case VK_OEM_MINUS: case VK_SUBTRACT: return CUIF_VK_MINUS;
+        case VK_OEM_PERIOD: case VK_DECIMAL: return CUIF_VK_PERIOD;
+        case VK_OEM_COMMA: return CUIF_VK_COMMA;
+        default: return CUIF_VK_NONE;
+    }
+}
+
+static uint32_t cuif_modifiers_now(void) {
+    uint32_t m = 0;
+    if (GetKeyState(VK_SHIFT) & 0x8000) m |= CUIF_MOD_SHIFT;
+    if (GetKeyState(VK_CONTROL) & 0x8000) m |= CUIF_MOD_CTRL;
+    if (GetKeyState(VK_MENU) & 0x8000) m |= CUIF_MOD_ALT;
+    if ((GetKeyState(VK_LWIN) | GetKeyState(VK_RWIN)) & 0x8000) m |= CUIF_MOD_META;
+    return m;
+}
 
 static LRESULT CALLBACK cuif_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     cuif_window* window = (cuif_window*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
@@ -119,6 +154,29 @@ static LRESULT CALLBACK cuif_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
             }
             return 0;
         }
+        case WM_KEYDOWN:
+        case WM_KEYUP: {
+            uint32_t vk = cuif_vk_from_win32((unsigned)wparam);
+            if (vk != CUIF_VK_NONE && window->root_widget) {
+                cuif_widget_dispatch_key(window->root_widget, msg == WM_KEYDOWN ? CUIF_KEY_DOWN : CUIF_KEY_UP, vk, cuif_modifiers_now());
+            }
+            return 0;
+        }
+        case WM_CHAR: {
+            /* UTF-16 code unit; surrogate pairs and control characters are
+             * not text for a readout, so only BMP printable characters pass. */
+            uint32_t cp = (uint32_t)wparam;
+            if (cp >= 0x20 && cp != 0x7F && (cp < 0xD800 || cp > 0xDFFF) && window->root_widget) {
+                cuif_widget_dispatch_key(window->root_widget, CUIF_KEY_CHAR, cp, cuif_modifiers_now());
+            }
+            return 0;
+        }
+        case WM_SETFOCUS:
+            window->keyboard_focus = true;
+            return 0;
+        case WM_KILLFOCUS:
+            cuif_window_set_keyboard_focus(window, false);
+            return 0;
         case WM_SIZE: {
             /* lparam here is also physical pixels -- track both for the projection/viewport split in render_frame. */
             int physical_w = LOWORD(lparam);
@@ -939,4 +997,31 @@ void cuif_window_inject_mouse_wheel(cuif_window* window, float logical_x, float 
     if (window->root_widget) {
         cuif_widget_dispatch_mouse_wheel(window->root_widget, logical_x, logical_y, delta_notches);
     }
+}
+
+void cuif_window_inject_key(cuif_window* window, int type, uint32_t key, uint32_t modifiers) {
+    if (!window) return;
+    cuif_current_window = window;
+    if (window->root_widget) {
+        cuif_widget_dispatch_key(window->root_widget, type, key, modifiers);
+    }
+}
+
+void cuif_window_set_keyboard_focus(cuif_window* window, bool focused) {
+    if (!window) return;
+    cuif_current_window = window;
+    window->keyboard_focus = focused;
+    if (!focused) cuif_widget_cancel_text_entry();
+}
+
+bool cuif_window_has_keyboard_focus(cuif_window* window) {
+    return window ? window->keyboard_focus : false;
+}
+
+struct cuif_widget* cuif_window_get_focused_widget(cuif_window* w) {
+    return w ? w->focused_widget : NULL;
+}
+
+void cuif_window_set_focused_widget(cuif_window* w, struct cuif_widget* widget) {
+    if (w) w->focused_widget = widget;
 }

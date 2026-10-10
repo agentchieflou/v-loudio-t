@@ -3,6 +3,9 @@
 
 #include "cuif/graphics.h"
 #include "cuif/font.h"
+#include "cuif/keys.h"
+#include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,8 +22,12 @@ typedef enum {
     CUIF_WIDGET_TABBAR,
     CUIF_WIDGET_METER,          /* level / gain-reduction bar with ballistics (#131) */
     CUIF_WIDGET_TRANSFER_CURVE, /* in->out dB curve of a dynamics processor (#131) */
-    CUIF_WIDGET_EQ_CURVE        /* frequency response with draggable band handles (#131) */
+    CUIF_WIDGET_EQ_CURVE,       /* frequency response with draggable band handles (#131) */
+    CUIF_WIDGET_READOUT         /* numeric value box with click-to-type entry (#131) */
 } cuif_widget_type;
+
+/* Longest text a readout accepts while editing, NUL included. */
+#define CUIF_READOUT_TEXT_MAX 24
 
 /* Maximum bands an EQ curve widget tracks. */
 #define CUIF_EQ_CURVE_MAX_BANDS 8
@@ -163,6 +170,26 @@ struct cuif_widget {
             bool draw_background;      /* false: transparent, to layer over an analyzer */
             cuif_widget_value_changed_fn on_band_change; /* value = band index */
         } eq_curve;
+
+        /*
+         * Numeric readout: shows `value` as "%.<decimals>f<unit>". A click
+         * starts text entry (the widget takes keyboard focus): digits, '-',
+         * '.', ',' (read as '.'), Backspace edit the text; Enter parses it,
+         * clamps to [min, max] and fires on_commit(w, value); Escape, a
+         * click elsewhere or loss of keyboard focus cancels. Hosts push the
+         * displayed value with cuif_widget_readout_set_value (never
+         * on_commit). The first keyboard-driven widget in cuif.
+         */
+        struct {
+            float value;
+            float min_value, max_value;
+            int decimals;
+            char unit[8];
+            bool editing;
+            char text[CUIF_READOUT_TEXT_MAX];
+            int text_len;
+            cuif_widget_value_changed_fn on_commit;
+        } readout;
     } u;
 };
 
@@ -211,6 +238,14 @@ void cuif_widget_eq_curve_set_response(cuif_widget* w, const float* response_db,
 /* Handle position for a band, in the widget's logical coordinates (tests and layout). */
 void cuif_widget_eq_curve_handle_position(const cuif_widget* w, int band, float* out_x, float* out_y);
 
+/* Readout (#131). unit may be NULL or up to 7 characters (e.g. " dB"). */
+cuif_widget* cuif_widget_create_readout(float x, float y, float w, float h, float min_value, float max_value,
+                                        int decimals, const char* unit, cuif_widget_value_changed_fn on_commit);
+/* Sets the displayed value (clamped). Ignored while the user is typing. */
+void cuif_widget_readout_set_value(cuif_widget* w, float value);
+/* The text the widget shows right now (display or edit buffer), for tests. */
+void cuif_widget_readout_text(const cuif_widget* w, char* out, size_t out_size);
+
 void cuif_widget_destroy(cuif_widget* w);
 void cuif_widget_add_child(cuif_widget* parent, cuif_widget* child);
 
@@ -234,6 +269,18 @@ void cuif_widget_dispatch_mouse_move(cuif_widget* root, float mx, float my, floa
 /* Pixel radius within which a click grabs an EQ band handle. */
 #define CUIF_EQ_HANDLE_RADIUS 10.0f
 void cuif_widget_dispatch_mouse_wheel(cuif_widget* root, float mx, float my, float delta_notches);
+
+/*
+ * Keyboard input (#131; codes in cuif/keys.h). Goes to the window's focused
+ * widget (set by a click on a readout, see cuif_window_set_focused_widget),
+ * never by position; returns true if that widget consumed it. CHAR events
+ * carry a UTF-32 code point in `key`; DOWN/UP carry a CUIF_VK_* code.
+ */
+bool cuif_widget_dispatch_key(cuif_widget* root, int type, uint32_t key, uint32_t modifiers);
+
+/* Ends any text entry in progress without committing (keyboard focus lost,
+ * editor closed, click elsewhere). Safe with no focused widget. */
+void cuif_widget_cancel_text_entry(void);
 
 /*
  * Double-clicking a knob resets it to its default_value (and fires
