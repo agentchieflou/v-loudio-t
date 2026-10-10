@@ -74,3 +74,36 @@ if(LOUDIO_REVERB_BUILD_TESTS)
     )
     target_include_directories(dsp_tests PRIVATE src ../../Framework/include)
 endif()
+
+# LPI (Loudio Plugin Interface) build of the Reverb (#101/B4): no JUCE, built
+# directly against ReverbCore, with an offscreen cuif GUI (lpi.gui.offscreen.v1).
+option(LOUDIO_REVERB_BUILD_LPI "Build the LPI-ABI Reverb DLL and its offscreen GUI test harness" ON)
+if(LOUDIO_REVERB_BUILD_LPI AND WIN32)
+    set(LPI_REVERB_OUTPUT_DIR "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+
+    add_library(lpi_reverb SHARED
+        src/lpi_reverb.cpp
+        src/ReverbCore.cpp
+        ../../Framework/src/window_win32.c
+        ../../Framework/src/graphics.c
+        ../../Framework/src/font.c
+        ../../Framework/src/widget.c
+        ../../Framework/src/theme.c
+        ../../Framework/src/theme_hello_kitty.c
+        ../../Framework/src/theme_greens.c
+    )
+    target_include_directories(lpi_reverb PRIVATE src ../../Framework/include ../../PluginABI/include)
+    target_compile_definitions(lpi_reverb PRIVATE UNICODE _UNICODE)
+    target_link_libraries(lpi_reverb PRIVATE opengl32 gdi32 user32)
+    set_target_properties(lpi_reverb PROPERTIES
+        OUTPUT_NAME "lpi_reverb"
+        RUNTIME_OUTPUT_DIRECTORY "${LPI_REVERB_OUTPUT_DIR}"
+    )
+
+    add_executable(lpi_reverb_gui_harness test/lpi_reverb_gui_harness.c)
+    target_include_directories(lpi_reverb_gui_harness PRIVATE ../../PluginABI/include)
+    add_dependencies(lpi_reverb_gui_harness lpi_reverb)
+    set_target_properties(lpi_reverb_gui_harness PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${LPI_REVERB_OUTPUT_DIR}"
+    )
+endif()
