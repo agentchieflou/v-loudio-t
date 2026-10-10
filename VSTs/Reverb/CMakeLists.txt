@@ -73,6 +73,11 @@ if(LOUDIO_REVERB_BUILD_TESTS)
         ../../Framework/src/theme_greens.c
     )
     target_include_directories(dsp_tests PRIVATE src ../../Framework/include)
+    # Golden impulse responses for the null test (#44) live next to the
+    # sources, not in the build tree, so dsp_tests finds them from any cwd.
+    target_compile_definitions(dsp_tests PRIVATE
+        LOUDIO_REVERB_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/golden"
+    )
 endif()
 
 # LPI (Loudio Plugin Interface) build of the Reverb (#101/B4): no JUCE, built
