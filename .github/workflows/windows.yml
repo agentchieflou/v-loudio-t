@@ -1,0 +1,98 @@
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every test in this repo uses assert(), so all builds are Debug -- a Release
+# (NDEBUG) build would compile the checks out and pass vacuously.
+#
+# Hosted runners have no GPU: Windows' own opengl32.dll is the GDI 1.1
+# software renderer (no FBOs), so the offscreen/GL tests run against Mesa's
+# llvmpipe opengl32.dll dropped next to each GL-using exe (opengl32 isn't a
+# KnownDLL, so the app directory wins).
+env:
+  MESA_VERSION: 24.2.7
+
+jobs:
+  framework:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch Mesa (software OpenGL)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$env:MESA_VERSION/mesa3d-$env:MESA_VERSION-release-msvc.7z"
+          Invoke-WebRequest $url -OutFile mesa.7z
+          7z x mesa.7z -omesa | Out-Null
+      - name: Configure
+        run: cmake -S Framework -B build/framework
+      - name: Build
+        run: cmake --build build/framework --config Debug
+      - name: Install Mesa next to GL tests
+        shell: pwsh
+        run: Copy-Item mesa/x64/*.dll build/framework/Debug/
+      - name: cuif_tests
+        working-directory: build/framework/Debug
+        run: ./cuif_tests.exe
+      - name: cuif_offscreen_harness
+        working-directory: build/framework/Debug
+        run: ./cuif_offscreen_harness.exe
+
+  plugin-abi:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S PluginABI -B build/abi
+      - name: Build
+        run: cmake --build build/abi --config Debug
+      - name: lpi_host_harness
+        working-directory: build/abi/bin/Debug
+        run: ./lpi_host_harness.exe
+      - name: lpi_rt_safety_test
+        working-directory: build/abi/bin/Debug
+        run: ./lpi_rt_safety_test.exe
+
+  reverb:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Fetch Mesa (software OpenGL)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$env:MESA_VERSION/mesa3d-$env:MESA_VERSION-release-msvc.7z"
+          Invoke-WebRequest $url -OutFile mesa.7z
+          7z x mesa.7z -omesa | Out-Null
+      - name: Configure
+        run: cmake -S VSTs/Reverb -B build/reverb
+      - name: Build tests + LPI plugin
+        run: cmake --build build/reverb --config Debug --target dsp_tests lpi_reverb lpi_reverb_gui_harness
+      - name: dsp_tests
+        working-directory: build/reverb/Debug
+        run: ./dsp_tests.exe
+      - name: Install Mesa next to LPI GUI harness
+        shell: pwsh
+        run: Copy-Item mesa/x64/*.dll build/reverb/bin/Debug/
+      - name: lpi_reverb_gui_harness
+        working-directory: build/reverb/bin/Debug
+        run: ./lpi_reverb_gui_harness.exe
+      - name: Upload LPI GUI frames
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lpi-reverb-frames
+          path: build/reverb/bin/Debug/*.ppm
+          if-no-files-found: ignore
+      - name: Build VST3 + Standalone
+        run: cmake --build build/reverb --config Debug --target LoudioReverb_VST3 LoudioReverb_Standalone
