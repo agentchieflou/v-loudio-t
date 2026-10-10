@@ -25,6 +25,10 @@
 
 LOUDIO_DEFINE_ALLOCATION_HOOK();
 
+#ifndef M_PI /* MSVC's <cmath> only defines it with _USE_MATH_DEFINES */
+#define M_PI 3.14159265358979323846
+#endif
+
 #ifndef LOUDIO_LIMITER_GOLDEN_DIR
 #define LOUDIO_LIMITER_GOLDEN_DIR "test/golden"
 #endif
