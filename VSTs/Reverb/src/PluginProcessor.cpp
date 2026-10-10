@@ -10,6 +10,10 @@ LoudioReverbProcessor::LoudioReverbProcessor()
     /* Initialize lock-free ring buffers with static pre-allocated storage */
     cuif_spsc_init(&dspToUiRingBuffer, dspToUiStorage, 1024);
     cuif_spsc_init(&uiToDspRingBuffer, uiToDspStorage, 1024);
+
+    for (int i = 0; i < kNumParams; ++i) {
+        rawParamValues[i] = apvts.getRawParameterValue(kReverbParams[i].id);
+    }
 }
 
 void LoudioReverbProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
@@ -38,7 +42,7 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
         size_t read_bytes = cuif_spsc_read(&uiToDspRingBuffer, (unsigned char*)&paramMsg, sizeof(ParamUpdateMessage));
         if (read_bytes == sizeof(ParamUpdateMessage)) {
             if (paramMsg.index >= 0 && paramMsg.index < kNumParams) {
-                *apvts.getRawParameterValue(kReverbParams[paramMsg.index].id) = paramMsg.value;
+                *rawParamValues[paramMsg.index] = paramMsg.value;
             }
         }
     }
@@ -48,7 +52,7 @@ void LoudioReverbProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
      * Same-thread, no queue -- see ReverbCore::setParameterValueDirect()'s
      * doc comment for why this is safe here specifically. */
     for (int i = 0; i < kNumParams; ++i) {
-        core.setParameterValueDirect(i, *apvts.getRawParameterValue(kReverbParams[i].id));
+        core.setParameterValueDirect(i, *rawParamValues[i]);
     }
 
     int numSamples = buffer.getNumSamples();

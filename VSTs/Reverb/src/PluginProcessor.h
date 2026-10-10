@@ -65,6 +65,12 @@ public:
 private:
     ReverbCore core;
 
+    /* std::atomic<float>* for every parameter, resolved once in the
+     * constructor. apvts.getRawParameterValue(id) is a string-keyed lookup
+     * that builds a juce::String from the id -- a heap allocation -- so it
+     * must never be called from processBlock() (#47). */
+    std::atomic<float>* rawParamValues[kNumParams] = {};
+
     /* Pre-allocated storage for ring buffers (1024 bytes is ample for FIFO data) */
     unsigned char dspToUiStorage[1024];
     unsigned char uiToDspStorage[1024];
