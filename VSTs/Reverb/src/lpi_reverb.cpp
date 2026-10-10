@@ -41,11 +41,6 @@ struct ReverbGui {
     int physW = 0, physH = 0;
 };
 
-void sendParams(void* context, const ParamUpdateMessage* msgs, size_t count) {
-    /* All-or-nothing; a dropped intermediate UI value is fine (see #107). */
-    static_cast<ReverbCore*>(context)->setParameterValues(msgs, count);
-}
-
 void syncFromCore(ReverbGui* g) {
     float params[kNumParams];
     for (int i = 0; i < kNumParams; ++i) params[i] = g->core->getParameterValue(i);
@@ -78,9 +73,51 @@ struct lpi_plugin {
     uint32_t maxBlock = 512;
     std::vector<float> scratchL, scratchR;
     ReverbGui* gui = nullptr;
+
+    /* lpi.params.changes.v1: editor-originated changes awaiting the host's
+     * next get_parameter_changes() drain. GUI thread only. */
+    struct PendingChange { bool queued = false; float value = 0.0f; uint32_t flags = 0; };
+    PendingChange pendingChanges[kNumParams];
+    bool gestureActive = false;
+    bool touchedInGesture[kNumParams] = {};
 };
 
 namespace {
+
+/* ReverbUi sendParams callback: forward to the core (all-or-nothing; a
+ * dropped intermediate UI value is fine, see #107) and, for every update
+ * the core accepted, queue an lpi.params.changes.v1 entry. */
+void sendParams(void* context, const ParamUpdateMessage* msgs, size_t count) {
+    lpi_plugin* p = static_cast<lpi_plugin*>(context);
+    if (!p->core.setParameterValues(msgs, count)) return;
+    for (size_t i = 0; i < count; ++i) {
+        int index = msgs[i].index;
+        auto& c = p->pendingChanges[index];
+        c.queued = true;
+        c.value = msgs[i].value;
+        if (p->gestureActive && !p->touchedInGesture[index]) {
+            p->touchedInGesture[index] = true;
+            c.flags |= LPI_PARAM_CHANGE_GESTURE_BEGIN;
+        }
+    }
+}
+
+void beginGesture(lpi_plugin* p) {
+    p->gestureActive = true;
+    for (bool& t : p->touchedInGesture) t = false;
+}
+
+/* Releases every parameter the gesture touched, at its last value. */
+void endGesture(lpi_plugin* p) {
+    if (!p->gestureActive) return;
+    p->gestureActive = false;
+    for (int i = 0; i < kNumParams; ++i) {
+        if (!p->touchedInGesture[i]) continue;
+        p->touchedInGesture[i] = false;
+        p->pendingChanges[i].queued = true;
+        p->pendingChanges[i].flags |= LPI_PARAM_CHANGE_GESTURE_END;
+    }
+}
 
 const lpi_plugin_info kInfo = { "com.loudio.reverb", "Loudio Reverb", "Loudio", 2, 2 };
 
@@ -166,7 +203,7 @@ bool guiOpen(lpi_plugin* p, float dpi, lpi_gui_offscreen_info* out) {
         }
     }
 
-    g->ui = reverbUiCreate((float)kPanelW, (float)kPanelH, { &p->core, sendParams });
+    g->ui = reverbUiCreate((float)kPanelW, (float)kPanelH, { p, sendParams });
     if (!g->ui) { destroyGui(g); return false; }
     cuif_window_set_root_widget(g->window, g->ui->root);
     syncFromCore(g);
@@ -184,6 +221,7 @@ bool guiOpen(lpi_plugin* p, float dpi, lpi_gui_offscreen_info* out) {
 }
 
 void guiClose(lpi_plugin* p) {
+    endGesture(p); /* closing mid-drag still releases the gesture */
     destroyGui(p->gui);
     p->gui = nullptr;
 }
@@ -205,16 +243,54 @@ void guiMouse(lpi_plugin* p, int type, float x, float y) {
     ReverbGui* g = p->gui;
     if (!g) return;
     switch (type) {
-        case LPI_MOUSE_DOWN: g->buttonDown = true;  cuif_window_inject_mouse_down(g->window, x, y, 0); break;
-        case LPI_MOUSE_UP:   g->buttonDown = false; cuif_window_inject_mouse_up(g->window, x, y, 0); break;
+        case LPI_MOUSE_DOWN:
+            g->buttonDown = true;
+            beginGesture(p);
+            cuif_window_inject_mouse_down(g->window, x, y, 0);
+            break;
+        case LPI_MOUSE_UP:
+            g->buttonDown = false;
+            /* Inject first: some widgets (dropdown items) commit on release,
+             * and that change belongs to this gesture. */
+            cuif_window_inject_mouse_up(g->window, x, y, 0);
+            endGesture(p);
+            break;
         default:             cuif_window_inject_mouse_move(g->window, x, y, g->buttonDown ? 0 : -1); break;
     }
 }
 
 const lpi_gui_offscreen_v1 kGuiExt = { guiOpen, guiClose, guiRender, guiReadPixels, guiMouse };
 
+/* ---- lpi.latency.v1 ---- */
+
+/* No lookahead anywhere in ReverbCore's chain (pre-delay is a musical
+ * effect, not processing latency), so the honest answer is 0. */
+uint32_t latencyGet(lpi_plugin*) { return 0; }
+
+const lpi_latency_v1 kLatencyExt = { latencyGet };
+
+/* ---- lpi.params.changes.v1 ---- */
+
+uint32_t paramChangesGet(lpi_plugin* p, lpi_param_change* out, uint32_t max) {
+    if (!p || !out) return 0;
+    uint32_t written = 0;
+    for (int i = 0; i < kNumParams && written < max; ++i) {
+        auto& c = p->pendingChanges[i];
+        if (!c.queued) continue;
+        out[written++] = { (uint32_t)i, c.value, c.flags };
+        c.queued = false;
+        c.flags = 0;
+    }
+    return written;
+}
+
+const lpi_param_changes_v1 kParamChangesExt = { paramChangesGet };
+
 void* apiGetExtension(lpi_plugin*, const char* id) {
-    if (id && std::strcmp(id, LPI_EXT_GUI_OFFSCREEN_V1) == 0) return (void*)&kGuiExt;
+    if (!id) return nullptr;
+    if (std::strcmp(id, LPI_EXT_GUI_OFFSCREEN_V1) == 0) return (void*)&kGuiExt;
+    if (std::strcmp(id, LPI_EXT_LATENCY_V1) == 0) return (void*)&kLatencyExt;
+    if (std::strcmp(id, LPI_EXT_PARAM_CHANGES_V1) == 0) return (void*)&kParamChangesExt;
     return nullptr;
 }
 

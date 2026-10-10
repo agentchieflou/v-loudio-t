@@ -77,17 +77,55 @@ int main(void) {
 
     float defaultDecay = api->get_parameter_value(inst, kDecayTimeIndex);
 
+    /* lpi.latency.v1: no lookahead in the Reverb. */
+    const lpi_latency_v1* latency = (const lpi_latency_v1*)api->get_extension(inst, LPI_EXT_LATENCY_V1);
+    CHECK(latency);
+    CHECK(latency->get_latency(inst) == 0);
+
+    /* lpi.params.changes.v1: nothing queued before any editor input. */
+    const lpi_param_changes_v1* changes = (const lpi_param_changes_v1*)api->get_extension(inst, LPI_EXT_PARAM_CHANGES_V1);
+    CHECK(changes);
+    lpi_param_change ch[8];
+    CHECK(changes->get_parameter_changes(inst, ch, 8) == 0);
+
     /* Hero decay knob centre per ReverbLayout.h: (345,50) + (55,55). Drag up. */
     gui->mouse_event(inst, LPI_MOUSE_MOVE, 400.0f, 105.0f);
     gui->mouse_event(inst, LPI_MOUSE_DOWN, 400.0f, 105.0f);
-    for (int i = 1; i <= 20; ++i) gui->mouse_event(inst, LPI_MOUSE_MOVE, 400.0f, 105.0f - 3.0f * i);
+    for (int i = 1; i <= 10; ++i) gui->mouse_event(inst, LPI_MOUSE_MOVE, 400.0f, 105.0f - 3.0f * i);
+
+    /* Mid-drag: one coalesced entry for decayTime, gesture begun, not ended. */
+    uint32_t n = changes->get_parameter_changes(inst, ch, 8);
+    printf("mid-drag changes: %u (index %u, flags %u)\n", n, n ? ch[0].index : 0u, n ? ch[0].flags : 0u);
+    CHECK(n == 1);
+    CHECK(ch[0].index == kDecayTimeIndex);
+    CHECK(ch[0].flags == LPI_PARAM_CHANGE_GESTURE_BEGIN);
+
+    for (int i = 11; i <= 20; ++i) gui->mouse_event(inst, LPI_MOUSE_MOVE, 400.0f, 105.0f - 3.0f * i);
     gui->mouse_event(inst, LPI_MOUSE_UP, 400.0f, 45.0f);
+
+    /* A zero-capacity drain writes nothing and leaves the entry queued. */
+    CHECK(changes->get_parameter_changes(inst, ch, 0) == 0);
 
     /* Queued edits are applied at the top of the next process() block. */
     processBlock(api, inst);
     float newDecay = api->get_parameter_value(inst, kDecayTimeIndex);
     printf("decayTime: %.3f -> %.3f\n", defaultDecay, newDecay);
     CHECK(fabsf(newDecay - defaultDecay) > 0.05f);
+
+    /* Release: END only (BEGIN was already drained), at the settled value. */
+    n = changes->get_parameter_changes(inst, ch, 8);
+    CHECK(n == 1);
+    CHECK(ch[0].index == kDecayTimeIndex);
+    CHECK(ch[0].flags == LPI_PARAM_CHANGE_GESTURE_END);
+    CHECK(ch[0].value == newDecay);
+    CHECK(changes->get_parameter_changes(inst, ch, 8) == 0); /* drained */
+
+    /* Host-originated writes are never echoed back. */
+    CHECK(api->set_parameter_value(inst, kDecayTimeIndex, 3.0f));
+    processBlock(api, inst);
+    CHECK(changes->get_parameter_changes(inst, ch, 8) == 0);
+    CHECK(api->set_parameter_value(inst, kDecayTimeIndex, newDecay)); /* restore for the frame check below */
+    processBlock(api, inst);
 
     CHECK(gui->render(inst));
     CHECK(gui->read_pixels(inst, after, bytes));
