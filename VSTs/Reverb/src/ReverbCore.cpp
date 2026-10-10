@@ -325,15 +325,13 @@ void ReverbCore::process(float* leftChannel, float* rightChannel, int numSamples
 
         /* Real-time FFT analyzers */
         if (fftAnalyzerLeft.pushSample(outWetL)) {
-            std::vector<float> magnitudes(64);
-            fftAnalyzerLeft.getMagnitudes(magnitudes);
-            std::memcpy(leftAnalyzerMagnitudes, magnitudes.data(), sizeof(leftAnalyzerMagnitudes));
+            /* Straight into the float[64] -- no per-frame std::vector (#47). */
+            fftAnalyzerLeft.getMagnitudes(leftAnalyzerMagnitudes);
             leftAnalyzerDirty = true;
         }
         if (fftAnalyzerRight.pushSample(outWetR)) {
-            std::vector<float> magnitudes(64);
-            fftAnalyzerRight.getMagnitudes(magnitudes);
-            std::memcpy(rightAnalyzerMagnitudes, magnitudes.data(), sizeof(rightAnalyzerMagnitudes));
+            /* Straight into the float[64] -- no per-frame std::vector (#47). */
+            fftAnalyzerRight.getMagnitudes(rightAnalyzerMagnitudes);
             rightAnalyzerDirty = true;
         }
     }

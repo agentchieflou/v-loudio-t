@@ -13,11 +13,41 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <new>
 #include <string>
 #include <iostream>
 #include <cassert>
 #include <cmath>
 #include <vector>
+
+/*
+ * Debug allocation hook for testReverbCoreProcessPerformsNoHeapAllocations
+ * (#47). Replacing the global operator new/delete routes every heap
+ * allocation in this executable through here; counting only while
+ * g_countAllocations is armed around process() gives an exact count of
+ * what the audio thread does, without disturbing the rest of the suite
+ * (iostreams, the std::vectors the other tests build, etc).
+ */
+static bool g_countAllocations = false;
+static long g_allocationCount = 0;
+static long g_deallocationCount = 0;
+
+void* operator new(std::size_t size) {
+    if (g_countAllocations) ++g_allocationCount;
+    void* p = std::malloc(size ? size : 1);
+    if (!p) throw std::bad_alloc();
+    return p;
+}
+void* operator new[](std::size_t size) {
+    if (g_countAllocations) ++g_allocationCount;
+    void* p = std::malloc(size ? size : 1);
+    if (!p) throw std::bad_alloc();
+    return p;
+}
+void operator delete(void* p) noexcept { if (g_countAllocations) ++g_deallocationCount; std::free(p); }
+void operator delete[](void* p) noexcept { if (g_countAllocations) ++g_deallocationCount; std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { if (g_countAllocations) ++g_deallocationCount; std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { if (g_countAllocations) ++g_deallocationCount; std::free(p); }
 
 /*
  * Regression test for the DelayLine::read() wrap-around precision bug the
@@ -561,6 +591,57 @@ void testReverbCoreAnalyzerFrameDirtyFlagLifecycle() {
     std::cout << "  Analyzer dirty flags set after a completed FFT frame and clear on read; magnitudes stay in [0,1]. Pass." << std::endl;
 }
 
+void testReverbCoreProcessPerformsNoHeapAllocations() {
+    std::cout << "Running testReverbCoreProcessPerformsNoHeapAllocations..." << std::endl;
+
+    ReverbCore core;
+    core.prepare(44100.0, 512);
+    std::vector<float> left(512), right(512);
+    auto fill = [&](int seed) {
+        for (int i = 0; i < 512; ++i) {
+            left[i] = 0.1f * (float)((i + seed) % 7);
+            right[i] = left[i];
+        }
+    };
+
+    /* One warm-up block outside the counted region: lazy first-call setup
+     * would be its own finding, but the steady-state contract is what the
+     * audio thread lives with. */
+    fill(0);
+    core.process(left.data(), right.data(), 512);
+
+    g_allocationCount = 0;
+    g_deallocationCount = 0;
+    g_countAllocations = true;
+
+    /* 16 blocks = 8192 samples = 8 completed 1024-point FFT frames per
+     * channel, plus a queued parameter change applied mid-stream so the
+     * smoother-restart and coefficient-update paths are counted too. */
+    for (int block = 0; block < 16; ++block) {
+        if (block == 4) {
+            core.setParameterValue(kParamDecayTime, 5.0f);
+            core.setParameterValue(kParamMode, 3.0f);
+            core.setParameterValue(kParamCrossoverLowMid, 400.0f);
+        }
+        fill(block + 1);
+        core.process(left.data(), right.data(), 512);
+        if (core.isLeftAnalyzerFrameDirty())  { float m[64]; core.getLeftAnalyzerMagnitudes(m); }
+        if (core.isRightAnalyzerFrameDirty()) { float m[64]; core.getRightAnalyzerMagnitudes(m); }
+    }
+
+    g_countAllocations = false;
+    long allocations = g_allocationCount;
+    long deallocations = g_deallocationCount;
+    if (allocations != 0 || deallocations != 0) {
+        std::cerr << "  process() performed " << allocations << " allocations / " << deallocations
+                  << " deallocations over 16 blocks" << std::endl;
+    }
+    assert(allocations == 0);
+    assert(deallocations == 0);
+
+    std::cout << "  16 blocks of process() (8 FFT frames/channel + a mid-stream parameter change) performed zero heap allocations. Pass." << std::endl;
+}
+
 /*
  * Golden impulse-response null test (#44). Runs a unit impulse through the
  * full ReverbCore signal chain (dryWet=1.0 so only the wet path is under
@@ -693,6 +774,7 @@ int main(int argc, char** argv) {
         testReverbCoreFreezeSustainsEnergy();
         testReverbCoreStateRoundTrip();
         testReverbCoreAnalyzerFrameDirtyFlagLifecycle();
+        testReverbCoreProcessPerformsNoHeapAllocations();
         testReverbCoreImpulseResponseMatchesGolden();
         std::cout << "All DSP tests passed successfully!" << std::endl;
         return 0;
