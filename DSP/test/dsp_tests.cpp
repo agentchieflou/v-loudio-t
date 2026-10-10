@@ -28,6 +28,7 @@
 #include "loudio/plugin/ParamTable.h"
 #include "loudio/plugin/StateBlob.h"
 #include "loudio/plugin/ParamQueue.h"
+#include "loudio/plugin/Transport.h"
 
 #include <algorithm>
 #include <cassert>
@@ -840,6 +841,39 @@ void testFeedbackPathStaysBounded() {
     std::cout << "  tanh feedback: transparent at low gain, |y| < 1 at 1.2x, loop settles instead of blowing up. Pass." << std::endl;
 }
 
+void testTransportDivisionHelpers() {
+    std::cout << "Running testTransportDivisionHelpers..." << std::endl;
+
+    /* 120 bpm: a quarter note is 0.5 s / 2 Hz; a bar of 4/4 is 2 s / 0.5 Hz;
+     * an eighth is 0.25 s / 4 Hz. */
+    assert(std::abs(loudio::tempoDivisionSeconds(120.0, 1.0) - 0.5f) < 1e-6f);
+    assert(std::abs(loudio::tempoDivisionHz(120.0, 1.0) - 2.0f) < 1e-6f);
+    assert(std::abs(loudio::tempoDivisionSeconds(120.0, 4.0) - 2.0f) < 1e-6f);
+    assert(std::abs(loudio::tempoDivisionHz(120.0, 4.0) - 0.5f) < 1e-6f);
+    assert(std::abs(loudio::tempoDivisionHz(120.0, 0.5) - 4.0f) < 1e-6f);
+    assert(std::abs(loudio::tempoDivisionSeconds(90.0, 1.5) - 1.0f) < 1e-6f); /* dotted quarter at 90 */
+    assert(loudio::tempoDivisionHz(0.0, 1.0) == 0.0f);
+    assert(loudio::tempoDivisionHz(120.0, 0.0) == 0.0f);
+    assert(loudio::tempoDivisionSeconds(0.0, 1.0) == 0.0f);
+
+    /* Phase of a one-bar cycle at various positions. */
+    assert(loudio::tempoPhaseAtPpq(0.0, 4.0) == 0.0f);
+    assert(std::abs(loudio::tempoPhaseAtPpq(1.0, 4.0) - 0.25f) < 1e-6f);
+    assert(std::abs(loudio::tempoPhaseAtPpq(17.0, 4.0) - 0.25f) < 1e-6f);
+    assert(std::abs(loudio::tempoPhaseAtPpq(3.5, 1.0) - 0.5f) < 1e-6f);
+    assert(std::abs(loudio::tempoPhaseAtPpq(-0.5, 4.0) - 0.875f) < 1e-6f); /* pre-roll wraps */
+    assert(loudio::tempoPhaseAtPpq(8.0, 0.0) == 0.0f);
+    float p = loudio::tempoPhaseAtPpq(123456.0, 4.0);
+    assert(p >= 0.0f && p < 1.0f);
+
+    loudio::TransportInfo t;
+    assert(!t.playing() && !t.tempoValid() && !t.ppqValid());
+    t.flags = loudio::kTransportPlaying | loudio::kTransportPpqValid;
+    assert(t.playing() && t.ppqValid() && !t.tempoValid());
+
+    std::cout << "  Division <-> Hz/seconds at 120 and 90 bpm, phase at ppq wraps, flag accessors. Pass." << std::endl;
+}
+
 int main() {
     std::cout << "==============================" << std::endl;
     std::cout << "Starting Loudio DSP component tests" << std::endl;
@@ -864,6 +898,7 @@ int main() {
     testAllPassUnityMagnitudeAndPhaser();
     testModulatedDelayMatchesPlainDelayAndFeedsBack();
     testFeedbackPathStaysBounded();
+    testTransportDivisionHelpers();
 
     std::cout << "All DSP component tests passed successfully!" << std::endl;
     return 0;

@@ -12,6 +12,7 @@ Everything parameter-shaped comes from the three headers next to this file:
 | `ParamTable.h` | `ParamMeta`, `ParamUpdate`, `ParamFlags` (== `LPI_PARAM_*`), `ParamTable` (`findById`, `sanitize`, `toWidget`/`fromWidget`, `fillDefaults`) |
 | `StateBlob.h` | `StateBlob::write`/`read`: the id-keyed v1 blob, two-call sizing, validate-then-apply, optional legacy raw-array load |
 | `ParamQueue.h` | `ParamQueue<CapacityBytes>`: SPSC, allocation-free, all-or-nothing `push`/`pushAll`, `drainInto` on the audio thread |
+| `Transport.h` | `TransportInfo` + `TransportFlags` (== `LPI_TRANSPORT_*`), tempo division helpers |
 
 ## Required members
 
@@ -40,7 +41,7 @@ public:
 
 - `int latencySamples() const` – reported through `lpi.latency.v1` / `setLatencySamples`. Absent means 0.
 - Analyzer / meter hooks, e.g. `bool isLeftAnalyzerFrameDirty() const; void getLeftAnalyzerMagnitudes(float* out64);`. Reading clears the dirty flag. Torn reads are acceptable for cosmetic displays.
-- `void setTransport(const lpi_transport_info&)` once `lpi.transport.v1` (#135) exists: called once per block before `process()`, may carry `PLAYING` clear and a stale position; keep a free-running fallback.
+- `void setTransport(const loudio::TransportInfo&)` (`Transport.h`, mirrors `lpi.transport.v1`, #135): both wrappers detect it and call it on the audio thread once per block before `process()`. The host may pass `PLAYING` clear with a stale position, or never call it: keep a free-running fallback and resync only when `PLAYING` and `PPQ_VALID` are both set. The LPI wrapper advertises `lpi.transport.v1` only when this member exists. `tempoDivisionHz` / `tempoDivisionSeconds` / `tempoPhaseAtPpq` turn tempo and position into LFO rates, delay times and phases.
 
 ## Threading
 

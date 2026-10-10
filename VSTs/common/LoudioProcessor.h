@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "loudio/plugin/ParamTable.h"
+#include "loudio/plugin/Transport.h"
 #include "cuif/ring_buffer.h"
 
 #include <atomic>
@@ -106,6 +107,24 @@ public:
          * UI changes above). Same thread as process(), no queue. */
         for (int i = 0; i < count; ++i) {
             core.setParameterValueDirect(i, *rawParamValues[(size_t)i]);
+        }
+
+        /* Transport (P9, #135): only for a core that asks for it, from the
+         * host's playhead, same shape as lpi.transport.v1. A host with no
+         * playhead, or one that reports nothing, leaves the core
+         * free-running (every flag clear). */
+        if constexpr (requires (Core& c, const loudio::TransportInfo& t) { c.setTransport(t); }) {
+            loudio::TransportInfo t;
+            t.sampleRate = getSampleRate();
+            if (juce::AudioPlayHead* head = getPlayHead()) {
+                if (auto pos = head->getPosition()) {
+                    if (auto bpm = pos->getBpm()) { t.tempoBpm = *bpm; t.flags |= loudio::kTransportTempoValid; }
+                    if (auto ppq = pos->getPpqPosition()) { t.ppqPosition = *ppq; t.flags |= loudio::kTransportPpqValid; }
+                    if (pos->getIsPlaying()) t.flags |= loudio::kTransportPlaying;
+                    if (pos->getIsLooping()) t.flags |= loudio::kTransportLooping;
+                }
+            }
+            core.setTransport(t);
         }
 
         core.process(buffer.getWritePointer(0), buffer.getWritePointer(1), buffer.getNumSamples());

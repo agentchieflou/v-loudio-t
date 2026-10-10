@@ -32,7 +32,9 @@
  * related edits batched; the wrapper forwards them to the core
  * (all-or-nothing) and queues lpi.params.changes.v1 entries for the ones
  * the core accepted. The wrapper reports Core::latencySamples() through
- * lpi.latency.v1 when the core has it, 0 otherwise.
+ * lpi.latency.v1 when the core has it, 0 otherwise, and advertises
+ * lpi.transport.v1 only when the core has
+ * setTransport(const loudio::TransportInfo&).
  *
  * Threading: audio thread -> process(). One "GUI thread" -> all of the
  * lpi.gui.offscreen.v1 calls AND set_parameter_value (both feed the core's
@@ -47,6 +49,7 @@
 
 #include "lpi/lpi.h"
 #include "loudio/plugin/ParamTable.h"
+#include "loudio/plugin/Transport.h"
 #include "cuif/cuif.h"
 #include "cuif/cuif_dpi_utils.h"
 
@@ -60,6 +63,10 @@
 static_assert((uint32_t)loudio::kParamBoolean == (uint32_t)LPI_PARAM_BOOLEAN, "loudio::ParamFlags must mirror LPI_PARAM_*");
 static_assert((uint32_t)loudio::kParamStepped == (uint32_t)LPI_PARAM_STEPPED, "loudio::ParamFlags must mirror LPI_PARAM_*");
 static_assert((uint32_t)loudio::kParamReadOnly == (uint32_t)LPI_PARAM_READONLY, "loudio::ParamFlags must mirror LPI_PARAM_*");
+static_assert((uint32_t)loudio::kTransportPlaying == (uint32_t)LPI_TRANSPORT_PLAYING, "loudio::TransportFlags must mirror LPI_TRANSPORT_*");
+static_assert((uint32_t)loudio::kTransportLooping == (uint32_t)LPI_TRANSPORT_LOOPING, "loudio::TransportFlags must mirror LPI_TRANSPORT_*");
+static_assert((uint32_t)loudio::kTransportTempoValid == (uint32_t)LPI_TRANSPORT_TEMPO_VALID, "loudio::TransportFlags must mirror LPI_TRANSPORT_*");
+static_assert((uint32_t)loudio::kTransportPpqValid == (uint32_t)LPI_TRANSPORT_PPQ_VALID, "loudio::TransportFlags must mirror LPI_TRANSPORT_*");
 
 namespace loudio {
 namespace lpi {
@@ -71,6 +78,11 @@ constexpr float kFontDesignSizePx = 13.0f;
 
 /* One open editor per DLL (v1). */
 inline bool g_guiOpen = false;
+
+template <class Core>
+constexpr bool coreHasTransport() {
+    return requires (Core& c, const TransportInfo& t) { c.setTransport(t); };
+}
 
 template <class Core>
 uint32_t coreLatency(const Core& core) {
@@ -351,6 +363,20 @@ struct Api {
 
     static uint32_t latencyGet(lpi_plugin* plugin) { return coreLatency(self(plugin)->core); }
 
+    /* ---- lpi.transport.v1 (only when the core has setTransport) ---- */
+
+    static void transportSet(lpi_plugin* plugin, const lpi_transport_info* info) {
+        if (!plugin || !info) return;
+        if constexpr (coreHasTransport<Core>()) {
+            TransportInfo t;
+            t.tempoBpm = info->tempo_bpm;
+            t.ppqPosition = info->ppq_position;
+            t.sampleRate = info->sample_rate;
+            t.flags = info->flags;
+            self(plugin)->core.setTransport(t);
+        }
+    }
+
     /* ---- lpi.params.changes.v1 ---- */
 
     static uint32_t paramChangesGet(lpi_plugin* plugin, lpi_param_change* out, uint32_t max) {
@@ -372,6 +398,7 @@ struct Api {
         if (std::strcmp(id, LPI_EXT_GUI_OFFSCREEN_V1) == 0) return (void*)&kGuiExt;
         if (std::strcmp(id, LPI_EXT_LATENCY_V1) == 0) return (void*)&kLatencyExt;
         if (std::strcmp(id, LPI_EXT_PARAM_CHANGES_V1) == 0) return (void*)&kParamChangesExt;
+        if (std::strcmp(id, LPI_EXT_TRANSPORT_V1) == 0) return coreHasTransport<Core>() ? (void*)&kTransportExt : nullptr;
         return nullptr;
     }
 
@@ -382,6 +409,7 @@ struct Api {
     static inline const lpi_gui_offscreen_v1 kGuiExt = { guiOpen, guiClose, guiRender, guiReadPixels, guiMouse };
     static inline const lpi_latency_v1 kLatencyExt = { latencyGet };
     static inline const lpi_param_changes_v1 kParamChangesExt = { paramChangesGet };
+    static inline const lpi_transport_v1 kTransportExt = { transportSet };
     static inline const lpi_plugin_api kApi = {
         create, destroy, activate, deactivate, process,
         paramCount, paramInfo, getParam, setParam,
