@@ -21,6 +21,10 @@
 #include "loudio/dsp/Lookahead.h"
 #include "loudio/dsp/SidechainHpf.h"
 #include "loudio/dsp/Hysteresis.h"
+#include "loudio/dsp/Lfo.h"
+#include "loudio/dsp/FeedbackPath.h"
+#include "loudio/dsp/ModulatedDelay.h"
+#include "loudio/dsp/AllPassStage.h"
 #include "loudio/plugin/ParamTable.h"
 #include "loudio/plugin/StateBlob.h"
 #include "loudio/plugin/ParamQueue.h"
@@ -597,6 +601,245 @@ void testHysteresisHasNoChatter() {
     std::cout << "  Opens above open, closes below close, no toggling in between. Pass." << std::endl;
 }
 
+/* ------------------------------------------------------------------------
+ * loudio/dsp modulation blocks (P7, #133)
+ * ---------------------------------------------------------------------- */
+
+void testLfoFrequencyAndShapes() {
+    std::cout << "Running testLfoFrequencyAndShapes..." << std::endl;
+
+    const double fs = 48000.0;
+    const int seconds = 10;
+    loudio::Lfo lfo;
+    lfo.setFrequencyHz(2.0f);
+    lfo.prepare(fs);
+
+    /* Sine: 2 Hz -> 20 cycles in 10 s. The run starts exactly on a cycle
+     * boundary (not counted) and stops one sample before the last one, so
+     * 19 boundaries fall inside it: the fencepost count kCycleBoundaries. */
+    const int kCycleBoundaries = seconds * 2 - 1;
+    int rising = 0; float prev = lfo.process(), minV = prev, maxV = prev; double sum = prev;
+    for (int n = 1; n < seconds * (int)fs; ++n) {
+        float v = lfo.process();
+        if (prev < 0.0f && v >= 0.0f) ++rising;
+        minV = std::min(minV, v); maxV = std::max(maxV, v); sum += v;
+        prev = v;
+    }
+    assert(rising == kCycleBoundaries);
+    assert(approxEqual(minV, -1.0f, 1e-3f) && approxEqual(maxV, 1.0f, 1e-3f));
+    assert(std::abs(sum / (seconds * fs)) < 1e-3);
+
+    /* Quarter-cycle offset of a sine is a cosine: the second channel of a
+     * stereo chorus without a second oscillator. */
+    lfo.resetPhase(0.0f);
+    for (int n = 0; n < 1000; ++n) {
+        float p = lfo.phaseCycles();
+        assert(approxEqual(lfo.valueAt(p + 0.25f), std::cos(2.0f * (float)M_PI * p), 1e-5f));
+        lfo.process();
+    }
+
+    /* Triangle: linear, range [-1, 1], peaks at phase 0.5. Its rising zero
+     * crossing is mid-cycle (phase 0.25), so all 20 fall inside the run. */
+    lfo.setShape(loudio::Lfo::Shape::Triangle);
+    lfo.resetPhase(0.0f);
+    assert(approxEqual(lfo.valueAt(0.0f), -1.0f, 1e-6f) && approxEqual(lfo.valueAt(0.5f), 1.0f, 1e-6f) && approxEqual(lfo.valueAt(0.25f), 0.0f, 1e-6f));
+    rising = 0; prev = lfo.process();
+    for (int n = 1; n < seconds * (int)fs; ++n) { float v = lfo.process(); if (prev < 0.0f && v >= 0.0f) ++rising; prev = v; }
+    assert(rising == seconds * 2);
+
+    /* Saw: rises monotonically within a cycle, drops once per cycle. */
+    lfo.setShape(loudio::Lfo::Shape::Saw);
+    lfo.resetPhase(0.0f);
+    int drops = 0; prev = lfo.process();
+    for (int n = 1; n < seconds * (int)fs; ++n) { float v = lfo.process(); if (v < prev) ++drops; else assert(v >= prev); prev = v; }
+    assert(drops == kCycleBoundaries);
+
+    /* Sample-and-hold: constant within a cycle, changes at cycle boundaries, deterministic. */
+    lfo.setShape(loudio::Lfo::Shape::SampleHold);
+    lfo.resetPhase(0.0f);
+    int changes = 0; prev = lfo.process();
+    for (int n = 1; n < seconds * (int)fs; ++n) {
+        float v = lfo.process();
+        assert(v >= -1.0f && v <= 1.0f);
+        if (v != prev) ++changes;
+        prev = v;
+    }
+    assert(changes == kCycleBoundaries);
+    /* Deterministic: two fresh instances produce the same sequence. */
+    loudio::Lfo a, b;
+    for (loudio::Lfo* l : { &a, &b }) { l->setShape(loudio::Lfo::Shape::SampleHold); l->setFrequencyHz(2.0f); l->prepare(fs); }
+    for (int n = 0; n < 100000; ++n) assert(a.process() == b.process());
+
+    /* 0 Hz holds its phase. */
+    lfo.setShape(loudio::Lfo::Shape::Sine);
+    lfo.setFrequencyHz(0.0f);
+    lfo.resetPhase(0.25f);
+    for (int n = 0; n < 100; ++n) assert(approxEqual(lfo.process(), 1.0f, 1e-6f));
+
+    std::cout << "  Sine/triangle/saw/S&H at 2 Hz: 19 cycle boundaries inside 10 s, right ranges, cosine at +0.25 cycles. Pass." << std::endl;
+}
+
+static float allPassResponse(loudio::AllPassStage& ap, float hz, double fs, float* outCorrelationWithMinusCos) {
+    ap.clear();
+    float peak = 0.0f; double dot = 0.0, norm = 0.0;
+    for (int n = 0; n < (int)fs; ++n) {
+        float w = 2.0f * (float)M_PI * hz * (float)n / (float)fs;
+        float y = ap.process(std::sin(w));
+        if (n > (int)fs / 2) {
+            peak = std::max(peak, std::abs(y));
+            dot += (double)y * -std::cos(w);
+            norm += (double)y * y;
+        }
+    }
+    if (outCorrelationWithMinusCos) *outCorrelationWithMinusCos = (float)(dot / std::sqrt(norm * (fs / 4.0)));
+    return peak;
+}
+
+void testAllPassUnityMagnitudeAndPhaser() {
+    std::cout << "Running testAllPassUnityMagnitudeAndPhaser..." << std::endl;
+
+    const double fs = 48000.0;
+    loudio::AllPassStage ap;
+    ap.setCornerFrequency(fs, 1000.0f);
+
+    /* Unity magnitude everywhere. */
+    for (float hz : { 50.0f, 300.0f, 1000.0f, 3000.0f, 10000.0f, 18000.0f }) {
+        float corr;
+        float peak = allPassResponse(ap, hz, fs, &corr);
+        assert(approxEqual(peak, 1.0f, 0.01f));
+    }
+    /* -90 degrees at the corner: output is -cos. */
+    float corr;
+    allPassResponse(ap, 1000.0f, fs, &corr);
+    assert(corr > 0.99f);
+
+    /* A 4-stage chain is also unity; mixed with dry it notches at the
+     * frequency where the chain's phase is 180 degrees (two stages at the
+     * corner give -180, so a 2-stage chain notches exactly at the corner). */
+    loudio::AllPassChain<2> chain;
+    chain.setCornerFrequency(fs, 1000.0f);
+    float wet = 0.0f, mixedAtCorner = 0.0f, mixedFar = 0.0f;
+    for (int n = 0; n < (int)fs; ++n) {
+        float x = std::sin(2.0f * (float)M_PI * 1000.0f * (float)n / (float)fs);
+        float y = chain.process(x);
+        if (n > (int)fs / 2) { wet = std::max(wet, std::abs(y)); mixedAtCorner = std::max(mixedAtCorner, std::abs(0.5f * (x + y))); }
+    }
+    chain.clear();
+    for (int n = 0; n < (int)fs; ++n) {
+        float x = std::sin(2.0f * (float)M_PI * 100.0f * (float)n / (float)fs);
+        float y = chain.process(x);
+        if (n > (int)fs / 2) mixedFar = std::max(mixedFar, std::abs(0.5f * (x + y)));
+    }
+    assert(approxEqual(wet, 1.0f, 0.01f));
+    assert(loudio::gainToDb(mixedAtCorner) < -40.0f); /* the phaser notch */
+    assert(loudio::gainToDb(mixedFar) > -1.0f);       /* passes far from it */
+    assert(loudio::AllPassChain<4>::stageCount() == 4);
+
+    std::cout << "  First-order all-pass is unity at 50 Hz..18 kHz, -90 deg at the corner; 2-stage chain + dry notches >40 dB. Pass." << std::endl;
+}
+
+void testModulatedDelayMatchesPlainDelayAndFeedsBack() {
+    std::cout << "Running testModulatedDelayMatchesPlainDelayAndFeedsBack..." << std::endl;
+
+    const double fs = 48000.0;
+
+    /* Zero modulation, zero feedback: an impulse comes out exactly D later. */
+    loudio::ModulatedDelay md;
+    md.prepare(fs, 50.0f);
+    md.setDelayMsImmediate(10.0f); /* 480 samples */
+    int arrived = -1;
+    for (int n = 0; n < 2000; ++n) {
+        float y = md.process(n == 0 ? 1.0f : 0.0f);
+        if (y != 0.0f) { assert(arrived == -1); assert(approxEqual(y, 1.0f, 1e-6f)); arrived = n; }
+    }
+    assert(arrived == 480);
+
+    /* Fractional, no modulation: equals DelayLine's own fractional read. */
+    md.clear();
+    md.setDelayMsImmediate(10.0f + 0.5f / 48.0f); /* 480.5 samples */
+    DelayLine ref; ref.prepare(1000);
+    for (int n = 0; n < 3000; ++n) {
+        float x = std::sin(0.01f * (float)n) * 0.5f + 0.25f;
+        float want = ref.read(480.5f); ref.write(x);
+        float got = md.process(x);
+        /* ms -> samples in float lands on 480.500015, so the very first
+         * delayed sample differs by that fraction of the step from silence. */
+        assert(approxEqual(got, want, 2e-5f));
+    }
+
+    /* Constant modulation offset is the same as a longer delay. */
+    md.clear();
+    md.setDelayMsImmediate(10.0f);
+    arrived = -1;
+    for (int n = 0; n < 2000; ++n) {
+        float y = md.process(n == 0 ? 1.0f : 0.0f, 20.0f);
+        if (y != 0.0f) { assert(arrived == -1); arrived = n; }
+    }
+    assert(arrived == 500);
+
+    /* A delay-time change ramps (no jump): the read position moves by at
+     * most one sample per sample, so a slow ramp input stays continuous. */
+    md.clear();
+    md.setDelayMsImmediate(5.0f);
+    for (int n = 0; n < 1000; ++n) md.process(0.5f);
+    md.setDelayMs(20.0f);
+    float prev = md.process(0.5f);
+    for (int n = 0; n < 2000; ++n) {
+        float y = md.process(0.5f);
+        assert(approxEqual(y, prev, 1e-5f)); /* constant input: output stays constant through the ramp */
+        prev = y;
+    }
+
+    /* Feedback 0.5: echoes decay by tanh(0.5) each repeat. */
+    md.clear();
+    md.setDelayMsImmediate(1.0f); /* 48 samples */
+    md.setFeedback(0.5f);
+    std::vector<float> echoes;
+    for (int n = 0; n < 48 * 5 + 1; ++n) {
+        float y = md.process(n == 0 ? 1.0f : 0.0f);
+        if (n > 0 && n % 48 == 0) echoes.push_back(y);
+    }
+    assert(echoes.size() == 5);
+    assert(approxEqual(echoes[0], 1.0f, 1e-6f));
+    assert(approxEqual(echoes[1], std::tanh(0.5f), 1e-5f));
+    assert(approxEqual(echoes[2], std::tanh(0.5f * std::tanh(0.5f)), 1e-5f));
+
+    /* Delay is clamped to the prepared maximum. */
+    md.setDelayMsImmediate(1000.0f);
+    assert(md.maxDelay() == 2400.0f);
+
+    std::cout << "  Impulse at exactly D; fractional read matches DelayLine; modulation offsets; ramps are continuous; feedback echoes decay by tanh(g). Pass." << std::endl;
+}
+
+void testFeedbackPathStaysBounded() {
+    std::cout << "Running testFeedbackPathStaysBounded..." << std::endl;
+
+    loudio::FeedbackPath fb;
+    fb.setGain(0.25f);
+    assert(approxEqual(fb.process(0.1f), 0.025f, 1e-4f)); /* transparent at low level */
+    fb.setGain(1.2f);
+    assert(std::abs(fb.process(100.0f)) <= 1.0f); /* tanh saturates to exactly 1.0f in float */
+    assert(std::abs(fb.process(-100.0f)) <= 1.0f);
+    assert(std::abs(fb.process(2.0f)) < 1.0f);
+
+    /* A delay with 1.2x feedback: the loop settles at the tanh fixed point
+     * (tanh(1.2 x) = x, x ~ 0.77) instead of growing without bound. */
+    loudio::ModulatedDelay md;
+    md.prepare(48000.0, 10.0f);
+    md.setDelayMsImmediate(1.0f);
+    md.setFeedback(1.2f);
+    float peak = 0.0f, last = 0.0f;
+    for (int n = 0; n < 48000; ++n) {
+        float y = md.process(n == 0 ? 1.0f : 0.0f);
+        peak = std::max(peak, std::abs(y));
+        if (n >= 48000 - 48) last = std::max(last, std::abs(y));
+    }
+    assert(peak <= 1.0f);
+    assert(last > 0.5f && last < 0.9f); /* alive at the fixed point, not exploded, not decayed */
+
+    std::cout << "  tanh feedback: transparent at low gain, |y| < 1 at 1.2x, loop settles instead of blowing up. Pass." << std::endl;
+}
+
 int main() {
     std::cout << "==============================" << std::endl;
     std::cout << "Starting Loudio DSP component tests" << std::endl;
@@ -617,6 +860,10 @@ int main() {
     testLookaheadDelaysByReportedLatency();
     testSidechainHpfAttenuatesBass();
     testHysteresisHasNoChatter();
+    testLfoFrequencyAndShapes();
+    testAllPassUnityMagnitudeAndPhaser();
+    testModulatedDelayMatchesPlainDelayAndFeedsBack();
+    testFeedbackPathStaysBounded();
 
     std::cout << "All DSP component tests passed successfully!" << std::endl;
     return 0;
