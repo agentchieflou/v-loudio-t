@@ -198,6 +198,25 @@ int main(void) {
         CHECK(minY >= 50 - margin && maxY <= 50 + 110 + margin);
     }
 
+    /* Double-click the decay knob: resets to its default (2.0 s) through the
+     * same injected mouse path a streaming host uses, and the reset is
+     * reported as one gesture (BEGIN on the reset, END on release). */
+    changes->get_parameter_changes(inst, ch, 8); /* drain */
+    /* A click on empty panel first, so the earlier drag's mouse-down on this
+     * knob (milliseconds ago on CI) can't pair with the first click below. */
+    gui->mouse_event(inst, LPI_MOUSE_DOWN, 700.0f, 580.0f);
+    gui->mouse_event(inst, LPI_MOUSE_UP, 700.0f, 580.0f);
+    gui->mouse_event(inst, LPI_MOUSE_DOWN, 400.0f, 105.0f);
+    gui->mouse_event(inst, LPI_MOUSE_UP, 400.0f, 105.0f);
+    gui->mouse_event(inst, LPI_MOUSE_DOWN, 400.0f, 105.0f);
+    gui->mouse_event(inst, LPI_MOUSE_UP, 400.0f, 105.0f);
+    processBlock(api, inst);
+    printf("double-click: decayTime %.3f -> %.3f\n", newDecay, api->get_parameter_value(inst, kDecayTimeIndex));
+    CHECK(fabsf(api->get_parameter_value(inst, kDecayTimeIndex) - defaultDecay) < 1e-4f); /* widget->param round trip */
+    n = changes->get_parameter_changes(inst, ch, 8);
+    CHECK(n == 1 && ch[0].index == kDecayTimeIndex && fabsf(ch[0].value - defaultDecay) < 1e-4f);
+    CHECK(ch[0].flags == (LPI_PARAM_CHANGE_GESTURE_BEGIN | LPI_PARAM_CHANGE_GESTURE_END));
+
     measureFrameCost(gui, inst, &info, "1.0x");
     gui->close(inst);
 

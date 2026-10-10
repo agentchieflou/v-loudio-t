@@ -112,12 +112,42 @@ cuif_widget* cuif_widget_create_tabbar(float x, float y, float w, float h, const
     return widget;
 }
 
+/* Double-click detection state (see widget.h). One UI thread, so plain statics. */
+static cuif_widget* s_last_click_widget = NULL;
+static unsigned long long s_last_click_time_ms = 0;
+static float s_last_click_x = 0.0f, s_last_click_y = 0.0f;
+static unsigned s_double_click_time_ms = 0; /* 0 = system setting */
+
+void cuif_widget_set_double_click_time_ms(unsigned ms) {
+    s_double_click_time_ms = ms;
+}
+
+static unsigned long long double_click_window_ms(void) {
+    return s_double_click_time_ms ? s_double_click_time_ms : (unsigned long long)GetDoubleClickTime();
+}
+
+/* Returns true if this down completes a double-click on `hit`, and records
+ * the click either way. A completed double-click clears the record so a
+ * third click starts over rather than chaining. */
+static bool register_click(cuif_widget* hit, float mx, float my) {
+    unsigned long long now = GetTickCount64();
+    bool is_double = hit == s_last_click_widget &&
+                     now - s_last_click_time_ms <= double_click_window_ms() &&
+                     fabsf(mx - s_last_click_x) <= 4.0f && fabsf(my - s_last_click_y) <= 4.0f;
+    s_last_click_widget = is_double ? NULL : hit;
+    s_last_click_time_ms = now;
+    s_last_click_x = mx;
+    s_last_click_y = my;
+    return is_double;
+}
+
 void cuif_widget_destroy(cuif_widget* w) {
     if (!w) return;
     for (int i = 0; i < w->child_count; ++i) {
         cuif_widget_destroy(w->children[i]);
     }
     free(w->children);
+    if (s_last_click_widget == w) s_last_click_widget = NULL;
     if (cuif_current_window) {
         if (cuif_window_get_active_widget(cuif_current_window) == w) cuif_window_set_active_widget(cuif_current_window, NULL);
         if (cuif_window_get_hovered_widget(cuif_current_window) == w) cuif_window_set_hovered_widget(cuif_current_window, NULL);
@@ -554,8 +584,20 @@ void cuif_widget_dispatch_mouse_down(cuif_widget* root, float mx, float my, int 
 
     cuif_window_set_active_widget(cuif_current_window, hit);
 
+    bool double_click = register_click(hit, mx, my);
+
     switch (hit->type) {
         case CUIF_WIDGET_KNOB:
+            if (double_click) {
+                /* Reset to default; no drag, so the following mouse-moves
+                 * don't immediately pull it away from the default again.
+                 * Also drop it as the active widget so move/up ignore it. */
+                hit->u.knob.dragging = false;
+                cuif_window_set_active_widget(cuif_current_window, NULL);
+                hit->u.knob.value = hit->u.knob.default_value;
+                if (hit->u.knob.on_change) hit->u.knob.on_change(hit, hit->u.knob.value);
+                break;
+            }
             hit->u.knob.dragging = true;
             hit->u.knob.drag_start_val = hit->u.knob.value;
             hit->u.knob.drag_start_y = my;
@@ -696,6 +738,7 @@ void cuif_widget_dispatch_mouse_move(cuif_widget* root, float mx, float my, floa
 
     switch (w->type) {
         case CUIF_WIDGET_KNOB: {
+            if (!w->u.knob.dragging) break; /* e.g. the moves after a double-click reset */
             float delta_y = my - w->u.knob.drag_start_y;
             float sens = 0.005f;
             float val = w->u.knob.drag_start_val - delta_y * sens;
@@ -761,4 +804,24 @@ void cuif_widget_dispatch_mouse_move(cuif_widget* root, float mx, float my, floa
         default:
             break;
     }
+}
+
+void cuif_widget_dispatch_mouse_wheel(cuif_widget* root, float mx, float my, float delta_notches) {
+    if (!root || delta_notches == 0.0f) return;
+    cuif_widget* hit = hit_test(root, mx, my);
+    if (!hit) return;
+
+    float* value = NULL;
+    cuif_widget_value_changed_fn on_change = NULL;
+    switch (hit->type) {
+        case CUIF_WIDGET_KNOB:   value = &hit->u.knob.value;   on_change = hit->u.knob.on_change;   break;
+        case CUIF_WIDGET_SLIDER: value = &hit->u.slider.value; on_change = hit->u.slider.on_change; break;
+        default: return;
+    }
+    float v = *value + delta_notches * CUIF_WHEEL_STEP;
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    if (v == *value) return;
+    *value = v;
+    if (on_change) on_change(hit, v);
 }

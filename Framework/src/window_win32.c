@@ -76,8 +76,25 @@ static LRESULT CALLBACK cuif_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
             window->last_mx = mx;
             window->last_my = my;
             SetCapture(hwnd);
+            /* WM_MOUSEWHEEL goes to the focused window, not the one under
+             * the cursor, so take focus on click -- the same thing every
+             * plugin editor does (the VST3 target already declares
+             * EDITOR_WANTS_KEYBOARD_FOCUS). */
+            SetFocus(hwnd);
             if (window->root_widget) {
                 cuif_widget_dispatch_mouse_down(window->root_widget, mx, my, 0);
+            }
+            return 0;
+        }
+        case WM_MOUSEWHEEL: {
+            /* Unlike the other mouse messages, lparam here is SCREEN coordinates. */
+            POINT pt = { (int)(short)LOWORD(lparam), (int)(short)HIWORD(lparam) };
+            ScreenToClient(hwnd, &pt);
+            float mx = cuif_physical_to_logical_px((float)pt.x, window->dpi_scale);
+            float my = cuif_physical_to_logical_px((float)pt.y, window->dpi_scale);
+            float notches = (float)(short)HIWORD(wparam) / (float)WHEEL_DELTA;
+            if (window->root_widget) {
+                cuif_widget_dispatch_mouse_wheel(window->root_widget, mx, my, notches);
             }
             return 0;
         }
@@ -913,5 +930,13 @@ void cuif_window_inject_mouse_move(cuif_window* window, float logical_x, float l
     window->last_my = logical_y;
     if (window->root_widget) {
         cuif_widget_dispatch_mouse_move(window->root_widget, logical_x, logical_y, dx, dy, button);
+    }
+}
+
+void cuif_window_inject_mouse_wheel(cuif_window* window, float logical_x, float logical_y, float delta_notches) {
+    if (!window) return;
+    cuif_current_window = window;
+    if (window->root_widget) {
+        cuif_widget_dispatch_mouse_wheel(window->root_widget, logical_x, logical_y, delta_notches);
     }
 }

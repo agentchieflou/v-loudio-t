@@ -814,7 +814,24 @@ void testReverbCoreImpulseResponseMatchesGolden() {
               << kGoldenIrTolerance << " (worst residual " << worstResidual << "). Pass." << std::endl;
 }
 
+#ifdef _MSC_VER
+#include <crtdbg.h>
+#endif
+/* On a Windows Debug build a failed assert() pops a modal abort dialog,
+ * which hangs a headless CI runner until the job times out. Route it to
+ * stderr and exit non-zero instead. */
+static void failFastOnAssert(void) {
+#ifdef _MSC_VER
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+#endif
+}
+
 int main(int argc, char** argv) {
+    failFastOnAssert();
     if (argc > 1 && std::string(argv[1]) == "--regen-golden") {
         std::cout << "Regenerating golden impulse responses..." << std::endl;
         regenerateGoldenImpulseResponses();
