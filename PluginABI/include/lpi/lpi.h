@@ -252,8 +252,14 @@ typedef struct lpi_latency_v1 {
  * calls and set_parameter_value run on).
  *
  * Semantics:
- *   - Only plugin-originated changes are reported. Values the host set via
- *     set_parameter_value are never echoed back.
+ *   - Only plugin-originated changes are reported. Anything the host
+ *     caused is never echoed back: values set via set_parameter_value, and
+ *     values loaded by set_state (presets).
+ *   - Read-only parameters (LPI_PARAM_READONLY: meters and other outputs)
+ *     are never queued. A host that wants them reads them with
+ *     get_parameter_value.
+ *   - lpi_param_change.value is in the parameter's own min_value..max_value
+ *     range -- the same units get_parameter_value returns.
  *   - Coalesced per parameter since the last call: one entry per changed
  *     parameter, carrying its latest value and the OR of its flags.
  *   - GESTURE_BEGIN marks the first change of a user gesture (e.g. a knob
@@ -263,6 +269,10 @@ typedef struct lpi_latency_v1 {
  *   - Returns the number of entries written to out (<= max). Entries that
  *     didn't fit stay queued for the next call. Entries are in ascending
  *     parameter index order.
+ *   - Lifetime: the queue is dropped on deactivate() and destroy(). Closing
+ *     the editor (lpi.gui.offscreen.v1 close) mid-gesture queues the
+ *     gesture's END; it stays queued until the host drains it, so a host
+ *     that drains before close() and one that drains after both see it.
  */
 #define LPI_EXT_PARAM_CHANGES_V1 "lpi.params.changes.v1"
 

@@ -142,7 +142,12 @@ bool apiActivate(lpi_plugin* p) {
     return true;
 }
 
-void apiDeactivate(lpi_plugin*) {}
+void apiDeactivate(lpi_plugin* p) {
+    /* lpi.params.changes.v1 lifetime: the queue doesn't survive deactivation. */
+    for (auto& c : p->pendingChanges) c = {};
+    p->gestureActive = false;
+    for (bool& t : p->touchedInGesture) t = false;
+}
 
 void apiProcess(lpi_plugin* p, const lpi_process_data* d) {
     uint32_t n = d->num_frames;
