@@ -44,8 +44,9 @@
  *     PluginEditor.cpp is unchanged by this refactor -- that bridge is
  *     JUCE-wrapper-specific, not something ReverbCore needs to know about).
  *
- * Preset/state save (getState/setState) is a small versioned binary blob of
- * the parameter array, independent of JUCE's own APVTS XML preset format --
+ * Preset/state save (getState/setState) is a small versioned binary blob
+ * keyed on parameter id strings (format documented above
+ * ReverbCore::getState in ReverbCore.cpp), independent of JUCE's own APVTS XML preset format --
  * LoudioReverbProcessor::getStateInformation/setStateInformation keep using
  * APVTS's existing XML shape unchanged, preserving current preset-file
  * compatibility. This is a second, separate state mechanism for hosts that

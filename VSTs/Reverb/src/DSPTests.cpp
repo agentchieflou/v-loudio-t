@@ -10,6 +10,8 @@
 #include "ReverbLayout.h"
 #include "ReverbCore.h"
 #include <set>
+#include <cstring>
+#include <cstdint>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -544,11 +546,9 @@ void testReverbCoreStateRoundTrip() {
     core.setParameterValueDirect(kParamMode, 3.0f);
 
     size_t required = core.getState(nullptr, 0);
-    assert(required == sizeof(float) * kNumParams);
-
     std::vector<unsigned char> buffer(required);
-    size_t written = core.getState(buffer.data(), buffer.size());
-    assert(written == required);
+    assert(core.getState(buffer.data(), buffer.size()) == required);
+    assert(std::memcmp(buffer.data(), "LRVB", 4) == 0);
 
     /* Undersized buffer must fail cleanly, not write out of bounds. */
     assert(core.getState(buffer.data(), 4) == 0);
@@ -559,9 +559,93 @@ void testReverbCoreStateRoundTrip() {
         assert(std::abs(other.getParameterValue(i) - core.getParameterValue(i)) < 1e-6f);
     }
 
-    assert(!other.setState(buffer.data(), 4)); /* undersized input rejected */
-
     std::cout << "  getState()/setState() round-trips every parameter onto a fresh ReverbCore instance. Pass." << std::endl;
+}
+
+/* Hand-builds a v1 blob from (id, value) pairs, independent of getState(),
+ * so these tests pin the on-disk format rather than just self-consistency. */
+static std::vector<unsigned char> buildStateV1(const std::vector<std::pair<std::string, float>>& entries) {
+    std::vector<unsigned char> b = { 'L', 'R', 'V', 'B' };
+    uint16_t version = 1, count = (uint16_t)entries.size();
+    b.insert(b.end(), (unsigned char*)&version, (unsigned char*)&version + 2);
+    b.insert(b.end(), (unsigned char*)&count, (unsigned char*)&count + 2);
+    for (const auto& e : entries) {
+        b.push_back((unsigned char)e.first.size());
+        b.insert(b.end(), e.first.begin(), e.first.end());
+        b.insert(b.end(), (const unsigned char*)&e.second, (const unsigned char*)&e.second + 4);
+    }
+    return b;
+}
+
+void testReverbCoreStateIsKeyedById() {
+    std::cout << "Running testReverbCoreStateIsKeyedById..." << std::endl;
+
+    /* Out of table order, an id this build doesn't know, and most params
+     * missing: known ids land on the right params, unknown ones are
+     * ignored, missing ones get defaults. */
+    auto blob = buildStateV1({ { "dryWet", 0.9f }, { "notARealParam", 123.0f }, { "decayTime", 7.0f } });
+    ReverbCore core;
+    core.setParameterValueDirect(kParamDamping, 0.99f); /* must be reset to default: missing from blob */
+    assert(core.setState(blob.data(), blob.size()));
+    assert(core.getParameterValue(kParamDryWet) == 0.9f);
+    assert(core.getParameterValue(kParamDecayTime) == 7.0f);
+    for (int i = 0; i < kNumParams; ++i) {
+        if (i == kParamDryWet || i == kParamDecayTime) continue;
+        assert(core.getParameterValue(i) == kReverbParams[i].defaultValue);
+    }
+
+    /* Out-of-range and non-finite values are sanitized, not applied raw. */
+    auto wild = buildStateV1({ { "decayTime", 1000.0f }, { "damping", std::nanf("") } });
+    assert(core.setState(wild.data(), wild.size()));
+    assert(core.getParameterValue(kParamDecayTime) == kReverbParams[kParamDecayTime].maxValue);
+    assert(core.getParameterValue(kParamDamping) == kReverbParams[kParamDamping].defaultValue);
+
+    std::cout << "  State keys on parameter ids: reorder/unknown/missing/out-of-range all handled. Pass." << std::endl;
+}
+
+void testReverbCoreStateRejectsCorruptBlobsAtomically() {
+    std::cout << "Running testReverbCoreStateRejectsCorruptBlobsAtomically..." << std::endl;
+
+    ReverbCore source;
+    source.setParameterValueDirect(kParamDecayTime, 9.5f);
+    std::vector<unsigned char> good(source.getState(nullptr, 0));
+    source.getState(good.data(), good.size());
+
+    ReverbCore core;
+    core.setParameterValueDirect(kParamWidth, 0.123f);
+
+    /* Every truncation of a valid blob must be rejected without touching
+     * the current state (atomic: validate everything, then apply). */
+    for (size_t n = 0; n < good.size(); ++n) {
+        if (n == sizeof(float) * 23) continue; /* that exact size is the legacy format */
+        assert(!core.setState(good.data(), n));
+        assert(core.getParameterValue(kParamWidth) == 0.123f);
+    }
+
+    std::vector<unsigned char> badVersion = good;
+    badVersion[4] = 99;
+    assert(!core.setState(badVersion.data(), badVersion.size()));
+    assert(!core.setState(nullptr, 0));
+    assert(core.getParameterValue(kParamWidth) == 0.123f);
+
+    std::cout << "  Truncated, wrong-version and null blobs are rejected and leave state untouched. Pass." << std::endl;
+}
+
+void testReverbCoreStateLoadsLegacyRawArray() {
+    std::cout << "Running testReverbCoreStateLoadsLegacyRawArray..." << std::endl;
+
+    /* The pre-v1 format: 23 raw floats in kReverbParams' original order. */
+    float legacy[23];
+    for (int i = 0; i < 23; ++i) legacy[i] = kReverbParams[i].defaultValue;
+    legacy[kParamDecayTime] = 11.0f;
+    legacy[kParamMode] = 4.0f;
+
+    ReverbCore core;
+    assert(core.setState(legacy, sizeof(legacy)));
+    assert(core.getParameterValue(kParamDecayTime) == 11.0f);
+    assert(core.getParameterValue(kParamMode) == 4.0f);
+
+    std::cout << "  A legacy raw-float-array blob still loads positionally. Pass." << std::endl;
 }
 
 void testReverbCoreAnalyzerFrameDirtyFlagLifecycle() {
@@ -773,6 +857,9 @@ int main(int argc, char** argv) {
         testReverbCoreProcessStaysBoundedOnNoise();
         testReverbCoreFreezeSustainsEnergy();
         testReverbCoreStateRoundTrip();
+        testReverbCoreStateIsKeyedById();
+        testReverbCoreStateRejectsCorruptBlobsAtomically();
+        testReverbCoreStateLoadsLegacyRawArray();
         testReverbCoreAnalyzerFrameDirtyFlagLifecycle();
         testReverbCoreProcessPerformsNoHeapAllocations();
         testReverbCoreImpulseResponseMatchesGolden();
