@@ -2,7 +2,8 @@
 
 A plugin's DSP engine (its *core*: `ReverbCore` today, `CompressorCore`
 etc. tomorrow) is a plain C++ class with no base class. The format
-wrappers (P2's LPI wrapper template, P3's VST3 common code) template on it,
+wrappers (the LPI wrapper template `PluginABI/wrapper/lpi/plugin_template.h`,
+P3's VST3 common code) template on it,
 so a core only has to provide the members below with these exact meanings.
 Everything parameter-shaped comes from the three headers next to this file:
 

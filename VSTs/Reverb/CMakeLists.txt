@@ -112,7 +112,7 @@ if(LOUDIO_REVERB_BUILD_LPI AND WIN32)
         ../../Framework/src/theme_hello_kitty.c
         ../../Framework/src/theme_greens.c
     )
-    target_include_directories(lpi_reverb PRIVATE src ../../Framework/include ../../PluginABI/include ${LOUDIO_DSP_INCLUDE})
+    target_include_directories(lpi_reverb PRIVATE src ../../Framework/include ../../PluginABI/include ../../PluginABI/wrapper ${LOUDIO_DSP_INCLUDE})
     target_compile_definitions(lpi_reverb PRIVATE UNICODE _UNICODE NOMINMAX)
     target_link_libraries(lpi_reverb PRIVATE opengl32 gdi32 user32)
     set_target_properties(lpi_reverb PROPERTIES

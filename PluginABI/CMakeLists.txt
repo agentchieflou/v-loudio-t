@@ -15,6 +15,13 @@ endif()
 add_library(lpi_abi INTERFACE)
 target_include_directories(lpi_abi INTERFACE include)
 
+# Header-only C++ wrapper template (wrapper/lpi/plugin_template.h, #128):
+# given a core on the DSP/include/loudio/plugin contract and a cuif UI
+# builder, emits a complete LPI plugin. Unlike lpi_abi it DOES depend on
+# cuif and loudio_dsp; a plugin links those itself (see VSTs/Reverb).
+add_library(lpi_wrapper INTERFACE)
+target_include_directories(lpi_wrapper INTERFACE include wrapper)
+
 # All build outputs land in one shared directory so LoadLibraryW's default
 # search path (the calling process's own directory) finds the toy plugin
 # DLL without needing an absolute path baked into the harness/test sources.
