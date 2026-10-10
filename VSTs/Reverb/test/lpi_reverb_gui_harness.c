@@ -38,6 +38,49 @@ static void processBlock(const lpi_plugin_api* api, lpi_plugin* inst) {
     api->process(inst, &d);
 }
 
+/*
+ * Frame-cost measurement for the B6 frame-streaming budget (#97 targets
+ * ~15-20fps ambient). Times render() and read_pixels() separately over
+ * many frames and prints avg/max per call plus the raw bandwidth a
+ * full-frame stream implies. Informational only -- no threshold: CI runs on
+ * Mesa llvmpipe (software GL), so absolute numbers are a pessimistic upper
+ * bound, not what a real GPU does. Its value is the trend between runs and
+ * the render/readback split.
+ */
+static double nowMs(void) {
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER t;
+    if (freq.QuadPart == 0) QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t);
+    return (double)t.QuadPart * 1000.0 / (double)freq.QuadPart;
+}
+
+static void measureFrameCost(const lpi_gui_offscreen_v1* gui, lpi_plugin* inst,
+                             const lpi_gui_offscreen_info* info, const char* label) {
+    enum { kFrames = 60 };
+    size_t bytes = (size_t)info->physical_width * info->physical_height * 4;
+    unsigned char* buf = (unsigned char*)malloc(bytes);
+    CHECK(buf);
+    double renderSum = 0, renderMax = 0, readSum = 0, readMax = 0;
+    CHECK(gui->render(inst)); /* warm-up */
+    CHECK(gui->read_pixels(inst, buf, bytes));
+    for (int i = 0; i < kFrames; ++i) {
+        double t0 = nowMs();
+        CHECK(gui->render(inst));
+        double t1 = nowMs();
+        CHECK(gui->read_pixels(inst, buf, bytes));
+        double t2 = nowMs();
+        renderSum += t1 - t0; if (t1 - t0 > renderMax) renderMax = t1 - t0;
+        readSum += t2 - t1;   if (t2 - t1 > readMax) readMax = t2 - t1;
+    }
+    double mbPerFrame = (double)bytes / (1024.0 * 1024.0);
+    printf("frame cost [%s %ux%u]: render avg %.2f ms (max %.2f), read_pixels avg %.2f ms (max %.2f), "
+           "%.2f MB/frame = %.1f MB/s at 20fps uncompressed\n",
+           label, info->physical_width, info->physical_height,
+           renderSum / kFrames, renderMax, readSum / kFrames, readMax, mbPerFrame, mbPerFrame * 20.0);
+    free(buf);
+}
+
 int main(void) {
     HMODULE m = LoadLibraryW(L"lpi_reverb.dll");
     CHECK(m);
@@ -155,6 +198,14 @@ int main(void) {
         CHECK(minY >= 50 - margin && maxY <= 50 + 110 + margin);
     }
 
+    measureFrameCost(gui, inst, &info, "1.0x");
+    gui->close(inst);
+
+    /* Same at 2.0x (a HiDPI browser client): 4x the pixels to render and ship. */
+    lpi_gui_offscreen_info info2x;
+    CHECK(gui->open(inst, 2.0f, &info2x));
+    CHECK(info2x.physical_width == 2 * info2x.logical_width);
+    measureFrameCost(gui, inst, &info2x, "2.0x");
     gui->close(inst);
     api->deactivate(inst);
     api->destroy(inst);
