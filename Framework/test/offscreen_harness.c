@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 static void on_knob_change(cuif_widget* w, float val) {
     (void)w;
@@ -91,7 +92,7 @@ int main(int argc, char** argv) {
     printf("cuif Offscreen Rendering Harness\n");
     printf("==============================\n");
 
-    const int logical_w = 300, logical_h = 200;
+    const int logical_w = 520, logical_h = 300; /* room for the #131 widgets beside the knob */
     const float dpi_scale = 1.5f; /* deliberately non-1.0, to exercise the same DPI path an offscreen window shares with a real one */
 
     /*
@@ -129,6 +130,29 @@ int main(int argc, char** argv) {
 
     cuif_widget* knob = cuif_widget_create_knob(100.0f, 45.0f, 90.0f, 110.0f, "Decay", 0.3f, on_knob_change);
     cuif_widget_add_child(root, knob);
+
+    /* #131 widgets, so CI renders them: a level meter and a gain-reduction
+     * meter with fed values, a compressor transfer curve with its operating
+     * point, and an EQ curve with three handles over a synthetic response. */
+    cuif_widget* level = cuif_widget_create_meter(220.0f, 45.0f, 18.0f, 110.0f, -60.0f, 0.0f, true);
+    cuif_widget_meter_feed(level, -9.0f);
+    cuif_widget_add_child(root, level);
+    cuif_widget* gr = cuif_widget_create_meter(250.0f, 45.0f, 18.0f, 110.0f, -30.0f, 0.0f, true);
+    gr->u.meter.fill_from_top = true;
+    cuif_widget_meter_feed(gr, -8.0f);
+    cuif_widget_add_child(root, gr);
+    cuif_widget* transfer = cuif_widget_create_transfer_curve(290.0f, 45.0f, 110.0f, 110.0f, -60.0f, 0.0f);
+    cuif_widget_transfer_curve_set(transfer, -30.0f, 4.0f, 6.0f, 0.0f, false);
+    cuif_widget_transfer_curve_feed(transfer, -20.0f, cuif_widget_transfer_curve_output_db(transfer, -20.0f));
+    cuif_widget_add_child(root, transfer);
+    static float eq_response[64];
+    for (int i = 0; i < 64; ++i) eq_response[i] = 8.0f * sinf((float)i / 63.0f * 6.2831853f);
+    cuif_widget* eq = cuif_widget_create_eq_curve(20.0f, 170.0f, (float)logical_w - 40.0f, 100.0f, 3, 20.0f, 20000.0f, -24.0f, 24.0f, NULL);
+    cuif_widget_eq_curve_set_band(eq, 0, 100.0f, 6.0f, 1.0f, true);
+    cuif_widget_eq_curve_set_band(eq, 1, 1000.0f, -8.0f, 2.0f, true);
+    cuif_widget_eq_curve_set_band(eq, 2, 8000.0f, 3.0f, 0.7f, true);
+    cuif_widget_eq_curve_set_response(eq, eq_response, 64);
+    cuif_widget_add_child(root, eq);
 
     int physical_w = (int)(logical_w * dpi_scale);
     int physical_h = (int)(logical_h * dpi_scale);

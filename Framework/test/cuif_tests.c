@@ -156,6 +156,175 @@ static void testKnobDoubleClickResetsToDefault(void) {
     printf("  Double-click resets a knob to its default without starting a drag; far-apart or slow clicks don't. Pass.\n");
 }
 
+/* ---- #131 widgets: meter, transfer curve, EQ curve ---- */
+
+static void testMeterBallisticsRiseInstantlyFallAtRateAndHoldPeak(void) {
+    printf("Running testMeterBallisticsRiseInstantlyFallAtRateAndHoldPeak...\n");
+
+    cuif_widget* m = cuif_widget_create_meter(0.0f, 0.0f, 20.0f, 200.0f, -60.0f, 0.0f, true);
+    assert(m && m->type == CUIF_WIDGET_METER);
+    assert(m->u.meter.value_db == -60.0f && m->u.meter.peak_db == -60.0f);
+
+    /* Rises instantly to the fed level; peak follows. */
+    cuif_widget_meter_feed(m, -6.0f);
+    assert(m->u.meter.value_db == -6.0f && m->u.meter.peak_db == -6.0f);
+
+    /* Fed a lower level: the bar falls at fall_db_per_second (24 dB/s),
+     * the peak holds for peak_hold_ms (1.5 s) before following. */
+    cuif_widget_meter_feed(m, -60.0f);
+    assert(m->u.meter.value_db == -6.0f); /* no time has passed */
+    cuif_widget_meter_step(m, 0.5f);
+    assert(fabsf(m->u.meter.value_db - (-18.0f)) < 1e-4f);
+    assert(m->u.meter.peak_db == -6.0f);
+    cuif_widget_meter_step(m, 1.0f);      /* 1.5 s total: hold expires now */
+    assert(fabsf(m->u.meter.value_db - (-42.0f)) < 1e-4f);
+    assert(m->u.meter.peak_db == -6.0f);
+    cuif_widget_meter_step(m, 0.5f);      /* peak now falls too */
+    assert(fabsf(m->u.meter.value_db - (-54.0f)) < 1e-4f);
+    assert(fabsf(m->u.meter.peak_db - (-18.0f)) < 1e-4f);
+    cuif_widget_meter_step(m, 10.0f);     /* never below the fed level */
+    assert(m->u.meter.value_db == -60.0f && m->u.meter.peak_db == -60.0f);
+
+    /* Out-of-range feeds clamp; a new peak restarts the hold. */
+    cuif_widget_meter_feed(m, +20.0f);
+    assert(m->u.meter.value_db == 0.0f && m->u.meter.peak_db == 0.0f);
+    cuif_widget_meter_feed(m, -100.0f);
+    assert(m->u.meter.fed_db == -60.0f);
+    cuif_widget_meter_step(m, 1.0f);
+    assert(m->u.meter.peak_db == 0.0f); /* still held */
+    cuif_widget_meter_feed(m, -3.0f);
+    cuif_widget_meter_feed(m, -60.0f);
+    cuif_widget_meter_step(m, 0.4f);
+    assert(m->u.meter.peak_db == 0.0f); /* 1.4 s: still held; the -3 dB feed was not a new peak, so it did not restart the hold */
+    cuif_widget_meter_step(m, 1.0f);
+    assert(m->u.meter.peak_db < 0.0f && m->u.meter.peak_db > -60.0f); /* 2.4 s: hold expired, the peak is falling */
+    cuif_widget_meter_feed(m, -2.0f);
+    assert(m->u.meter.peak_db == -2.0f && m->u.meter.peak_age_ms == 0.0f); /* a feed above the fallen peak is a new peak and restarts the hold */
+
+    /* Horizontal and gain-reduction variants construct too. */
+    cuif_widget* gr = cuif_widget_create_meter(0.0f, 0.0f, 200.0f, 20.0f, -30.0f, 0.0f, false);
+    gr->u.meter.fill_from_top = true;
+    cuif_widget_meter_feed(gr, -12.0f);
+    assert(gr->u.meter.value_db == -12.0f);
+
+    cuif_widget_destroy(m);
+    cuif_widget_destroy(gr);
+    printf("  Meter rises instantly, falls at 24 dB/s, holds its peak 1.5 s, clamps to its range. Pass.\n");
+}
+
+static void testTransferCurveMatchesGainComputerFormula(void) {
+    printf("Running testTransferCurveMatchesGainComputerFormula...\n");
+
+    cuif_widget* tc = cuif_widget_create_transfer_curve(0.0f, 0.0f, 200.0f, 200.0f, -60.0f, 0.0f);
+    assert(tc && tc->type == CUIF_WIDGET_TRANSFER_CURVE);
+    /* Unset: 1:1. */
+    assert(fabsf(cuif_widget_transfer_curve_output_db(tc, -20.0f) - (-20.0f)) < 1e-5f);
+
+    /* Same acceptance point as the DSP test: -20 in, 4:1 over -30 -> -27.5. */
+    cuif_widget_transfer_curve_set(tc, -30.0f, 4.0f, 0.0f, 0.0f, false);
+    assert(fabsf(cuif_widget_transfer_curve_output_db(tc, -20.0f) - (-27.5f)) < 1e-4f);
+    assert(fabsf(cuif_widget_transfer_curve_output_db(tc, -40.0f) - (-40.0f)) < 1e-5f);
+
+    /* Soft knee: continuous at the edges, exact at threshold. */
+    cuif_widget_transfer_curve_set(tc, -30.0f, 4.0f, 10.0f, 0.0f, false);
+    assert(fabsf(cuif_widget_transfer_curve_output_db(tc, -35.0f) - (-35.0f)) < 1e-4f);
+    assert(fabsf(cuif_widget_transfer_curve_output_db(tc, -25.0f) - (-28.75f)) < 1e-4f);
+    assert(fabsf(cuif_widget_transfer_curve_output_db(tc, -30.0f) - (-30.9375f)) < 1e-4f);
+
+    /* Limiter pins at the threshold. */
+    cuif_widget_transfer_curve_set(tc, -1.0f, 1.0e6f, 0.0f, 0.0f, false);
+    assert(fabsf(cuif_widget_transfer_curve_output_db(tc, 6.0f) - (-1.0f)) < 1e-3f);
+
+    /* Expander with a 20 dB range floor. */
+    cuif_widget_transfer_curve_set(tc, -40.0f, 4.0f, 0.0f, 20.0f, true);
+    assert(fabsf(cuif_widget_transfer_curve_output_db(tc, -30.0f) - (-30.0f)) < 1e-5f);
+    assert(fabsf(cuif_widget_transfer_curve_output_db(tc, -42.0f) - (-48.0f)) < 1e-4f);
+    assert(fabsf(cuif_widget_transfer_curve_output_db(tc, -60.0f) - (-80.0f)) < 1e-4f);
+
+    cuif_widget_transfer_curve_feed(tc, -20.0f, -27.5f);
+    assert(tc->u.transfer_curve.has_point && tc->u.transfer_curve.point_in_db == -20.0f);
+
+    cuif_widget_destroy(tc);
+    printf("  Transfer curve reproduces the compressor/limiter/expander formulas and takes an operating point. Pass.\n");
+}
+
+static int g_eq_band_change_calls = 0;
+static int g_eq_last_band = -1;
+static void eqBandChanged(cuif_widget* w, float band) {
+    (void)w;
+    g_eq_last_band = (int)band;
+    g_eq_band_change_calls++;
+}
+
+static void testEqCurveHandlesDragWheelAndMapping(void) {
+    printf("Running testEqCurveHandlesDragWheelAndMapping...\n");
+
+    /* 400 px wide over 20 Hz..20 kHz (3 decades), 200 px tall over -24..+24 dB. */
+    cuif_widget* eq = cuif_widget_create_eq_curve(0.0f, 0.0f, 400.0f, 200.0f, 3, 20.0f, 20000.0f, -24.0f, 24.0f, eqBandChanged);
+    assert(eq && eq->type == CUIF_WIDGET_EQ_CURVE && eq->u.eq_curve.band_count == 3);
+
+    /* Log mapping: 200 Hz is one decade in -> x = 133.3; 0 dB is mid-height. */
+    cuif_widget_eq_curve_set_band(eq, 0, 200.0f, 0.0f, 1.0f, true);
+    float hx, hy;
+    cuif_widget_eq_curve_handle_position(eq, 0, &hx, &hy);
+    assert(fabsf(hx - 400.0f / 3.0f) < 0.01f);
+    assert(fabsf(hy - 100.0f) < 0.01f);
+    cuif_widget_eq_curve_set_band(eq, 1, 2000.0f, 12.0f, 2.0f, true);
+    cuif_widget_eq_curve_handle_position(eq, 1, &hx, &hy);
+    assert(fabsf(hx - 800.0f / 3.0f) < 0.01f);
+    assert(fabsf(hy - 50.0f) < 0.01f);
+    /* Band 2 stays disabled: no handle. */
+
+    /* Drag band 0's handle to (x of 2 kHz, y of -12 dB). */
+    g_eq_band_change_calls = 0;
+    cuif_widget_dispatch_mouse_down(eq, 400.0f / 3.0f, 100.0f, 0);
+    assert(eq->u.eq_curve.active_band == 0);
+    cuif_widget_dispatch_mouse_move(eq, 800.0f / 3.0f, 150.0f, 0.0f, 0.0f, 0);
+    assert(fabsf(eq->u.eq_curve.band_hz[0] - 2000.0f) < 1.0f);
+    assert(fabsf(eq->u.eq_curve.band_gain_db[0] - (-12.0f)) < 1e-3f);
+    assert(g_eq_band_change_calls == 1 && g_eq_last_band == 0);
+    cuif_widget_dispatch_mouse_up(eq, 800.0f / 3.0f, 150.0f, 0);
+    assert(eq->u.eq_curve.active_band == -1);
+
+    /* Dragging past the edges clamps to the ranges. */
+    cuif_widget_dispatch_mouse_down(eq, 800.0f / 3.0f, 150.0f, 0);
+    cuif_widget_dispatch_mouse_move(eq, -50.0f, 500.0f, 0.0f, 0.0f, 0);
+    assert(eq->u.eq_curve.band_hz[0] == 20.0f && eq->u.eq_curve.band_gain_db[0] == -24.0f);
+    cuif_widget_dispatch_mouse_up(eq, -50.0f, 500.0f, 0);
+
+    /* A click away from every handle grabs nothing and moves nothing. */
+    g_eq_band_change_calls = 0;
+    cuif_widget_dispatch_mouse_down(eq, 200.0f, 20.0f, 0);
+    assert(eq->u.eq_curve.active_band == -1);
+    cuif_widget_dispatch_mouse_move(eq, 210.0f, 30.0f, 0.0f, 0.0f, 0);
+    assert(g_eq_band_change_calls == 0);
+    cuif_widget_dispatch_mouse_up(eq, 210.0f, 30.0f, 0);
+
+    /* Wheel over band 1's handle scales its Q by 1.1 per notch, clamped. */
+    cuif_widget_eq_curve_handle_position(eq, 1, &hx, &hy);
+    cuif_widget_dispatch_mouse_wheel(eq, hx + 3.0f, hy - 3.0f, 1.0f);
+    assert(fabsf(eq->u.eq_curve.band_q[1] - 2.2f) < 1e-4f);
+    assert(g_eq_band_change_calls == 1 && g_eq_last_band == 1);
+    cuif_widget_dispatch_mouse_wheel(eq, hx, hy, -2.0f);
+    assert(fabsf(eq->u.eq_curve.band_q[1] - 2.2f / 1.21f) < 1e-4f);
+    cuif_widget_dispatch_mouse_wheel(eq, hx, hy, 100.0f);
+    assert(eq->u.eq_curve.band_q[1] == 30.0f);
+    cuif_widget_dispatch_mouse_wheel(eq, hx, hy, 1.0f); /* at the clamp: no callback */
+    assert(g_eq_band_change_calls == 3);
+    cuif_widget_dispatch_mouse_wheel(eq, 200.0f, 20.0f, 1.0f); /* no handle here */
+    assert(g_eq_band_change_calls == 3);
+
+    /* A host-supplied response curve is just referenced, not copied. */
+    static float response[16];
+    cuif_widget_eq_curve_set_response(eq, response, 16);
+    assert(eq->u.eq_curve.response_db == response && eq->u.eq_curve.response_count == 16);
+    cuif_widget_eq_curve_set_response(eq, NULL, 99);
+    assert(eq->u.eq_curve.response_count == 0);
+
+    cuif_widget_destroy(eq);
+    printf("  EQ handles map log-frequency/dB, drag with clamping, wheel scales Q, misses do nothing. Pass.\n");
+}
+
 static void setUpTestWindow(void) {
     cuif_window_desc desc = { 0 };
     desc.title = "cuif_tests (hidden)";
@@ -694,6 +863,10 @@ int main(void) {
 
     testKnobWheelStepsValueAndClamps();
     testKnobDoubleClickResetsToDefault();
+
+    testMeterBallisticsRiseInstantlyFallAtRateAndHoldPeak();
+    testTransferCurveMatchesGainComputerFormula();
+    testEqCurveHandlesDragWheelAndMapping();
 
     testDefaultThemeIsActiveInitially();
     testSetThemeChangesActiveTheme();
