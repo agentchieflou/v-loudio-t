@@ -1,5 +1,22 @@
 # Architecture & Implementation Blueprint: Vintage VCA Bus Compressor ("The Glue")
 
+> **Platform amendment (#140, spike §5.2, decided with the implementation in
+> `VSTs/Glue`).** The LPI build has no Eigen and no JUCE DSP, and Wave
+> Digital Filters are heavy for the sonic benefit on a VCA compressor. The
+> plugin keeps everything this blueprint is about (feedback topology, `tanh`
+> VCA, SSL-style timing network with auto release, sidechain HPF, parallel
+> mix) and resolves the delay-free loop the standard way: a **one-sample
+> delayed feedback path**, with the whole loop running at **4×** on the
+> platform's own linear-phase oversampler (`loudio::Oversampler`, P8), so
+> the loop delay is a quarter of a base-rate sample and the `tanh`
+> harmonics are generated and filtered above the base band. Sections 2 and
+> 4 below (ChowDSP/Faust/Kfr, WDF, Eigen, 8× polyphase IIR) are the
+> original research notes and are **not** what is built. Measured on the
+> implementation: the loop is stable on a 0 dBFS square for 10 s (no limit
+> cycle, no DC drift), the switch ratios hold within 0.3 dB, the rail's 3rd
+> harmonic sits at −46 dB at 0 dBFS and its aliasing products are >60 dB
+> down. Latency 48 samples, fixed.
+
 This document details the architectural design and implementation strategies for a high-fidelity analog-modeled Voltage-Controlled Amplifier (**VCA**) Bus Compressor, commonly known as **The Glue**. This design focuses on emulating the feedback topology, non-linear circuit saturation, and cohesive dynamic characteristics of vintage British mix-bus hardware.
 
 ---
