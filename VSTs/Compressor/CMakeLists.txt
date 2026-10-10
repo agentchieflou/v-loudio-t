@@ -52,6 +52,11 @@ target_compile_definitions(LoudioCompressor PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
+PRIVATE
+    # NOMINMAX: cuif/ring_buffer.h (via the core's ParamQueue) pulls in
+    # <windows.h>, whose min/max macros otherwise break std::min/std::max
+    # in the core. JUCE defines it itself (guarded), so no conflict.
+    NOMINMAX
 )
 
 target_link_libraries(LoudioCompressor PRIVATE
