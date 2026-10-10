@@ -212,9 +212,9 @@ int main(void) {
     gui->mouse_event(inst, LPI_MOUSE_UP, 400.0f, 105.0f);
     processBlock(api, inst);
     printf("double-click: decayTime %.3f -> %.3f\n", newDecay, api->get_parameter_value(inst, kDecayTimeIndex));
-    CHECK(api->get_parameter_value(inst, kDecayTimeIndex) == defaultDecay);
+    CHECK(fabsf(api->get_parameter_value(inst, kDecayTimeIndex) - defaultDecay) < 1e-4f); /* widget->param round trip */
     n = changes->get_parameter_changes(inst, ch, 8);
-    CHECK(n == 1 && ch[0].index == kDecayTimeIndex && ch[0].value == defaultDecay);
+    CHECK(n == 1 && ch[0].index == kDecayTimeIndex && fabsf(ch[0].value - defaultDecay) < 1e-4f);
     CHECK(ch[0].flags == (LPI_PARAM_CHANGE_GESTURE_BEGIN | LPI_PARAM_CHANGE_GESTURE_END));
 
     measureFrameCost(gui, inst, &info, "1.0x");

@@ -664,7 +664,24 @@ static void testInjectedMouseDownReachesWidgetOnOffscreenWindow(void) {
     printf("  cuif_window_inject_mouse_down() reaches a widget's callback exactly like a real WM_LBUTTONDOWN would. Pass.\n");
 }
 
+#ifdef _MSC_VER
+#include <crtdbg.h>
+#endif
+/* On a Windows Debug build a failed assert() pops a modal abort dialog,
+ * which hangs a headless CI runner until the job times out. Route it to
+ * stderr and exit non-zero instead. */
+static void failFastOnAssert(void) {
+#ifdef _MSC_VER
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+#endif
+}
+
 int main(void) {
+    failFastOnAssert();
     printf("==============================\n");
     printf("Starting cuif Framework Tests\n");
     printf("==============================\n");

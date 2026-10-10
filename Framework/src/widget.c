@@ -590,8 +590,10 @@ void cuif_widget_dispatch_mouse_down(cuif_widget* root, float mx, float my, int 
         case CUIF_WIDGET_KNOB:
             if (double_click) {
                 /* Reset to default; no drag, so the following mouse-moves
-                 * don't immediately pull it away from the default again. */
+                 * don't immediately pull it away from the default again.
+                 * Also drop it as the active widget so move/up ignore it. */
                 hit->u.knob.dragging = false;
+                cuif_window_set_active_widget(cuif_current_window, NULL);
                 hit->u.knob.value = hit->u.knob.default_value;
                 if (hit->u.knob.on_change) hit->u.knob.on_change(hit, hit->u.knob.value);
                 break;
@@ -736,6 +738,7 @@ void cuif_widget_dispatch_mouse_move(cuif_widget* root, float mx, float my, floa
 
     switch (w->type) {
         case CUIF_WIDGET_KNOB: {
+            if (!w->u.knob.dragging) break; /* e.g. the moves after a double-click reset */
             float delta_y = my - w->u.knob.drag_start_y;
             float sens = 0.005f;
             float val = w->u.knob.drag_start_val - delta_y * sens;
