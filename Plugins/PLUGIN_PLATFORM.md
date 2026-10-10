@@ -2,7 +2,7 @@
 
 **Purpose.** Before building the next ten plugins, work out what a plugin costs today, what is generic, what must be lifted into shared infrastructure first, and what each planned plugin needs on top. This is the design behind the "Plugin platform + plugin catalogue" epic; each section maps to one or more of its issues.
 
-**Status.** Research + plan, grounded in the Reverb as it exists on `main` after #119–#124. Numbers are measured, not estimated, unless marked.
+**Status.** Delivered. The research and plan below are kept as written (grounded in the Reverb as it existed on `main` after #119–#124; numbers measured unless marked); §7 records what actually landed and where it departed from the plan.
 
 **Issue map.** Epic #125. Platform: P1 #127, P2 #128, P3 #129, P4 #130, P5 #131, P6 #132, P7 #133, P8 #134, P9 #135. Plugins: EQ-8 #136, Compressor #137, Gate #138, Limiter #139, Glue #140, Bus #141, Delay #142, Flanger #143, Phaser #144, EQ-3 #145, AutoTune #146, candidates #147.
 
@@ -79,13 +79,35 @@ The order is chosen so each plugin introduces at most one new shared block and t
 
 ## 5. Decisions needed
 
-1. **"Bus".** Interpreted as a utility/channel tool (gain, pan, width, phase, mono). If it meant a bus *compressor*, that is Glue. If it meant a summing/routing device, that is host-side (noprod insert chains), not a plugin.
+1. **"Bus".** Built as a utility/channel tool (gain, pan, width, phase, mono, swap, DC block; #164). If it was meant as a bus *compressor*, that is Glue; if a summing/routing device, that is host-side (noprod insert chains), not a plugin. Open for the owner to confirm.
 2. **Glue blueprint vs. platform constraints.** The blueprint prescribes Wave Digital Filters, Eigen for state-space maths and `juce::dsp::Oversampling`. Eigen and JUCE DSP are unavailable in the LPI build, and WDF for a VCA compressor is heavy for the sonic benefit. **Decided (with #140's implementation):** the same feedback topology and `tanh` VCA, resolved with a one-sample-delayed feedback loop running at 4× on our own oversampler (P8). The blueprint carries the amendment at its top.
-3. **Precision.** The EQ-8 blueprint asks for 64-bit biquads for low-frequency bands. Proposal: `SimpleBiquad` gets a `double`-state variant (TDF2) used by EQ-8 and EQ-3 only; everything else stays `float`.
-4. **SIMD.** All five blueprints list AVX/NEON intrinsics. Proposal: none in v1 — the Reverb's `process()` is under 5% of a core at 48 kHz/512 and these plugins are cheaper; revisit with a measurement, as with #48.
-5. **Tempo sync.** Needs P9 and noprod's cooperation. If noprod won't carry transport in its v1, the Delay ships free-running only.
+3. **Precision.** Decided (#158): `BiquadD` (double state, TDF2, smoothed `setTarget`) is used by EQ-8 and EQ-3 only; everything else stays `float`.
+4. **SIMD.** Decided: none in v1 — the Reverb's `process()` is under 5% of a core at 48 kHz/512 and these plugins are cheaper; revisit with a measurement, as with #48.
+5. **Tempo sync.** Decided: noprod carries `lpi.transport.v1` (#135); the Delay (#165) syncs to host tempo when the extension is present and runs free otherwise.
 6. **Scaffold language.** Decided (P4, #130): `tools/new_plugin.py`, Python 3 with no dependencies. CI needs Python anyway to enumerate plugins for the matrix (`tools/list_plugins.py`), and both GitHub runners ship it; contributors only need it to scaffold, never to build.
 
 ## 6. Non-goals (this epic)
 
 Sidechain/external inputs (LPI has no bus concept; Compressor/Gate use internal detection only in v1), MIDI, GUI resizing/reflow (the layout helper still ignores height), keyboard shortcuts beyond text entry, and any new plugin *format*.
+
+## 7. Outcome (closeout, 2026-10-10)
+
+All nine platform issues and all eleven plugins are merged on `main`. Each plugin lives in `VSTs/<Name>/` (VST3 + LPI from one core), was scaffolded with `tools/new_plugin.py`, and runs the generic `CoreTests.h` kit plus its own DSP tests in the `plugin (<Name>)` CI job and `dsp-linux`.
+
+| Plugin | PR | Latency @48 kHz | Notes / departures from §3 |
+|---|---|---|---|
+| EQ-8 | #159 | 0 | `BiquadD` (§5.3); EQ-curve widget with handles over the analyzer |
+| Compressor | #160 | 480 (fixed) | Lookahead latency is **fixed at the maximum** (10 ms); the sidechain is delayed by the remainder. Required by `lpi.latency.v1`, which fixes latency for the life of an activation. 11 params (adds sidechain HPF). |
+| Gate | #161 | 480 (fixed) | Same fixed-latency scheme; `Hysteresis` block; OPEN lamp |
+| Limiter | #162 | 504 (fixed) | 480 lookahead + 24 for 2×/4× upsample-only true-peak; input gain instead of output gain; hard ceiling test with 0.99999 margin |
+| Glue | #163 | 48 | Whole feedback loop at 4× (§5.2); auto release = max(fast, slow); blueprint amended at its top |
+| Bus | #164 | 0 | Bit-exact at defaults; pan law √2·cos/sin (unity at centre). Uses knobs, not the planned pan/width widget. |
+| Delay | #165 | 0 | 15 sync divisions via `lpi.transport.v1`; loop filters bypass at range ends; tanh-limited feedback with cross-feed |
+| Flanger | #166 | 0 | Through-zero delays the dry path by the centre delay; depth as % of centre |
+| Phaser | #167 | 0 | 4/6/8/12 stages; corner = centre·2^(2·depth·LFO) |
+| EQ-3 | #168 | 0 | New `CrossoverLR4` (LR4 + three-band); the Reverb's first-order `Crossover` untouched; flat within 0.01 dB |
+| AutoTune | #169 | 2848 | New `PitchDetectorYin` and `PsolaShifter` (fractional analysis marks); hop 256, window 1024; no golden IR; blueprint amended at its top |
+
+**Platform departures.** P5 shipped in two parts (#155 meters/transfer/EQ curve, #156 keyboard input + readout via `lpi.gui.keyboard.v1`); the pan/width control was not built, so #131 stays open for it. `LoudioProcessor` now pushes parameter values into the core before `prepare()` and reports latency at prepare and per block. The JUCE targets define `NOMINMAX` (MSVC `std::max` vs. `windows.h`).
+
+**Still open after this epic.** #131 (pan/width widget), #147 (candidate triage: Chorus, Tremolo, Saturator, De-esser, Stereo Imager, Transient Shaper). Follow-ups not yet filed: EQ-8 band readouts and pre/post analyzer switch; AutoTune pitch display and scale editor; re-targeting the Reverb's `DSPTests.cpp` onto the generic kit.
