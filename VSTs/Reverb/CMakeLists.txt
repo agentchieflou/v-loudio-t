@@ -75,7 +75,10 @@ if(LOUDIO_REVERB_BUILD_TESTS)
     target_include_directories(dsp_tests PRIVATE src ../../Framework/include)
     # Golden impulse responses for the null test (#44) live next to the
     # sources, not in the build tree, so dsp_tests finds them from any cwd.
+    # NOMINMAX: cuif/ring_buffer.h pulls in <windows.h>, whose min/max
+    # macros otherwise break every std::min/std::max in the tests.
     target_compile_definitions(dsp_tests PRIVATE
+        NOMINMAX
         LOUDIO_REVERB_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/golden"
     )
 endif()
@@ -98,7 +101,7 @@ if(LOUDIO_REVERB_BUILD_LPI AND WIN32)
         ../../Framework/src/theme_greens.c
     )
     target_include_directories(lpi_reverb PRIVATE src ../../Framework/include ../../PluginABI/include)
-    target_compile_definitions(lpi_reverb PRIVATE UNICODE _UNICODE)
+    target_compile_definitions(lpi_reverb PRIVATE UNICODE _UNICODE NOMINMAX)
     target_link_libraries(lpi_reverb PRIVATE opengl32 gdi32 user32)
     set_target_properties(lpi_reverb PROPERTIES
         OUTPUT_NAME "lpi_reverb"

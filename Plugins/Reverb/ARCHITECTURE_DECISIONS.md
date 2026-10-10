@@ -20,6 +20,8 @@ Concretely: Win32 windowing, an OpenGL (WGL) rendering context, a small custom v
 
 ## 3. noprod integration: standard native-window embedding, not frame streaming
 
+> **Superseded by §5** (Epic #97). Kept for history: noprod now hosts plugins through LPI, with the editor rendered offscreen and streamed to the browser — the frame-streaming model this section ruled out for v1.
+
 **noprod** (`github.com/agentchieflou/noprod`, checked out locally at `C:\Users\Louar\Desktop\AntiRepo\noprod`) is a separate, early-stage AI-assisted DAW prototype: a React/DOM web frontend talking to a headless C++/JUCE backend (`apps/audio_core`, internally "Ghost DAW") over a hand-rolled WebSocket/JSON protocol. As of this writing:
 
 - `audio_core` links **no GUI/graphics JUCE modules** (`juce_add_console_app`, no `juce_gui_basics`/`juce_opengl`) — it cannot open a window or render pixels. It scans for VST3 plugins at startup but never instantiates or processes audio through one.
@@ -31,4 +33,17 @@ Since noprod has no native rendering surface today, the integration path is the 
 
 ## 4. Scope boundary: DSP/plugin format stays JUCE
 
+> **Partly superseded by §5.** The VST3 build still uses JUCE for format plumbing, APVTS and automation, but the DSP no longer depends on JUCE: it lives in the JUCE-free `ReverbCore`, which both the VST3 wrapper and the LPI wrapper build on.
+
 Only the **UI rendering layer** is custom C. The DSP engine and VST3 plugin format integration (`AudioProcessorValueTreeState`, audio I/O, parameter automation) remain on **JUCE (C++)**, matching every other plugin blueprint in this repo (`EQ-3`, `EQ-8`, `Compressor`, `Glue`, `AutoTune`) and avoiding a from-scratch reimplementation of VST3 hosting/format plumbing that JUCE already solves.
+
+## 5. LPI is the primary plugin format; VST3/JUCE is the compatibility bridge
+
+Decided in Epic #97 and built in #106 (B1), #108 (B2), #109 (B3), #111/#114 (B4).
+
+- **Two formats, one engine.** `VSTs/Reverb/src/ReverbCore.{h,cpp}` is the JUCE-free DSP engine with its own parameter table (`kReverbParams` in `SharedStructures.h`), an RT-safe parameter queue and a versioned, id-keyed state blob (#115). The JUCE wrapper (`PluginProcessor`/`PluginEditor`) and the LPI wrapper (`lpi_reverb.cpp`) are both thin shells around it.
+- **LPI** (`PluginABI/include/lpi/lpi.h`) is a plain-C ABI: one exported `lpi_get_factory`, a per-type vtable, and string-id extensions for capabilities. Parameters and state are keyed by string id, never by index.
+- **Editor delivery for noprod** is the `lpi.gui.offscreen.v1` extension. cuif renders into an FBO (`cuif_window_create_offscreen`), the host pulls top-left RGBA8 frames with `read_pixels`, and it relays logical-pixel mouse events back. All GUI calls and `set_parameter_value` run on one host thread. v1 allows one open editor per process.
+- **VST3 hosts (Ableton, Reaper, …)** keep the native-window editor through JUCE, as in §3.
+- **Known gaps:** see the LPI ABI follow-ups (transport/tempo, latency reporting, bypass, MIDI and sidechain are not in v1), and the shared UI builder/`ParamBridge` that B3 planned but never built. The VST3 editor and the LPI editor currently each construct the widget tree.
+
