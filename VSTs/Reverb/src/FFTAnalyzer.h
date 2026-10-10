@@ -47,12 +47,12 @@ public:
         return false;
     }
 
-    /* Pulls log-spaced magnitudes (64 bins) scaled from 0.0 to 1.0 */
-    void getMagnitudes(std::vector<float>& magnitudes) {
-        magnitudes.assign(64, 0.0f);
-
+    /* Pulls log-spaced magnitudes (64 bins) scaled from 0.0 to 1.0 into
+     * out64, a caller-owned array of 64 floats. Takes a raw pointer rather
+     * than a std::vector so the audio thread can call it without a heap
+     * allocation (#47) -- ReverbCore writes straight into its own float[64]. */
+    void getMagnitudes(float* out64) {
         int numBins = fftSize / 2;
-
         for (int i = 0; i < 64; ++i) {
             float norm = (float)i / 63.0f;
             /* Logarithmic lookup mapping low bins to higher bins */
@@ -60,18 +60,15 @@ public:
             int idx = (int)logIndex;
             if (idx >= numBins) idx = numBins - 1;
             if (idx < 0) idx = 0;
-
             float real = fftData[2 * idx];
             float imag = fftData[2 * idx + 1];
             float mag = std::sqrt(real * real + imag * imag);
-
             /* Convert to dB, normalized log scale [-80dB, 0dB] -> [0.0, 1.0] */
             float db = 20.0f * std::log10(mag + 1e-4f);
             float normalized = (db + 80.0f) / 80.0f;
             if (normalized < 0.0f) normalized = 0.0f;
             if (normalized > 1.0f) normalized = 1.0f;
-
-            magnitudes[i] = normalized;
+            out64[i] = normalized;
         }
     }
 
