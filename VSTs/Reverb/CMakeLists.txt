@@ -102,6 +102,7 @@ if(LOUDIO_REVERB_BUILD_LPI AND WIN32)
     target_link_libraries(lpi_reverb PRIVATE opengl32 gdi32 user32)
     set_target_properties(lpi_reverb PROPERTIES
         OUTPUT_NAME "lpi_reverb"
+        PREFIX "" # MinGW would otherwise emit liblpi_reverb.dll; the harness loads lpi_reverb.dll
         RUNTIME_OUTPUT_DIRECTORY "${LPI_REVERB_OUTPUT_DIR}"
     )
 

@@ -150,11 +150,16 @@ void syncFromCore(ReverbGui* g) {
 void destroyGui(ReverbGui* g) {
     if (!g) return;
     if (g->root) cuif_widget_destroy(g->root);
-    if (g->window) cuif_window_destroy(g->window);
+    /* Free the font BEFORE the window: its texture lives in the offscreen
+     * window's GL context, which is still current here. After
+     * cuif_window_destroy() that context is gone and glDeleteTextures()
+     * inside cuif_font_free() would be a no-op (font texture leak, found
+     * by the noprod host build of #111). */
     if (g->ownsFont && cuif_global_font) {
         cuif_font_free(cuif_global_font);
         cuif_global_font = nullptr;
     }
+    if (g->window) cuif_window_destroy(g->window);
     delete g;
     g_guiOpen = false;
 }
