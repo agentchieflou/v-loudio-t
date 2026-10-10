@@ -4,6 +4,8 @@
 
 **Status.** Research + plan, grounded in the Reverb as it exists on `main` after #119–#124. Numbers are measured, not estimated, unless marked.
 
+**Issue map.** Epic #125. Platform: P1 #127, P2 #128, P3 #129, P4 #130, P5 #131, P6 #132, P7 #133, P8 #134, P9 #135. Plugins: EQ-8 #136, Compressor #137, Gate #138, Limiter #139, Glue #140, Bus #141, Delay #142, Flanger #143, Phaser #144, EQ-3 #145, AutoTune #146, candidates #147.
+
 ---
 
 ## 1. What one plugin costs today (Reverb, measured)
