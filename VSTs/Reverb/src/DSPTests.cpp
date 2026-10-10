@@ -10,11 +10,54 @@
 #include "ReverbLayout.h"
 #include "ReverbCore.h"
 #include <set>
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <iostream>
 #include <cassert>
 #include <cmath>
 #include <vector>
+
+/*
+ * Regression test for the DelayLine::read() wrap-around precision bug the
+ * golden-IR null test (#44) exposed. Feeds a known ramp for two full buffer
+ * revolutions and checks every read against the ideal fractional delay,
+ * for delays exactly on, just above and just below an integer. On the old
+ * implementation the 882.00006 case returned 0 at the wrap sample instead
+ * of ~0.5 -- for the impulse-response test that was THE sample, scaling
+ * the entire wet path by ~6e-5.
+ */
+void testDelayLineFractionalReadAcrossWrap() {
+    std::cout << "Running testDelayLineFractionalReadAcrossWrap..." << std::endl;
+
+    const int size = 6617; /* ReverbCore's pre-delay buffer at 44.1 kHz */
+    const float delays[] = { 882.0f, 882.00006f, 881.99994f, 1.0f, 1.5f, 6616.5f };
+    for (float d : delays) {
+        DelayLine line;
+        line.prepare(size);
+        int di = (int)d;
+        float f = d - (float)di;
+        std::vector<float> history;
+        auto h = [&](int k) { return k >= 0 ? history[(size_t)k] : 0.0f; };
+
+        for (int n = 0; n < 2 * size + 100; ++n) {
+            float x = 0.5f + (float)(n % 1000) * 0.0004f; /* never zero, so a dropout can't hide */
+            line.write(x);
+            history.push_back(x);
+            float got = line.read(d);
+            /* write-then-read convention (as ReverbCore's pre-delay uses it):
+             * read(D) after writing x[n] returns (1-f)*x[n+1-Di] + f*x[n-Di]. */
+            float expected = (1.0f - f) * h(n + 1 - di) + f * h(n - di);
+            if (std::abs(got - expected) >= 1e-5f) {
+                std::cerr << "  delay " << d << " at n=" << n << ": got " << got << " expected " << expected << std::endl;
+            }
+            assert(std::abs(got - expected) < 1e-5f);
+        }
+    }
+
+    std::cout << "  Fractional reads stay exact across two buffer revolutions for delays on/just above/just below an integer. Pass." << std::endl;
+}
 
 void testHouseholderUnitary() {
     std::cout << "Running testHouseholderUnitary..." << std::endl;
@@ -518,12 +561,120 @@ void testReverbCoreAnalyzerFrameDirtyFlagLifecycle() {
     std::cout << "  Analyzer dirty flags set after a completed FFT frame and clear on read; magnitudes stay in [0,1]. Pass." << std::endl;
 }
 
-int main() {
+/*
+ * Golden impulse-response null test (#44). Runs a unit impulse through the
+ * full ReverbCore signal chain (dryWet=1.0 so only the wet path is under
+ * test -- the dry path is covered by testReverbCoreDryWetZeroIsExactPassthrough)
+ * once per reverb mode and compares against a reference IR checked into
+ * test/golden/. Any DSP change that alters the sound -- a coefficient, a
+ * delay length, a filter -- shows up here; the stability tests above only
+ * catch blow-ups.
+ *
+ * File format: raw little-endian float32, kGoldenIrLen left samples then
+ * kGoldenIrLen right samples. Regenerate after an INTENTIONAL DSP change:
+ *     dsp_tests --regen-golden
+ * then review the before/after difference before committing the new files.
+ *
+ * Tolerance is -60 dB (1e-3 absolute on a signal with a ~1.0 peak). The
+ * references were generated with g++ on x86-64; MSVC's libm can differ by
+ * a few ulp in transcendental functions and the FDN's feedback compounds
+ * that, so this is deliberately not a bit-exact check. A real DSP change
+ * produces residuals orders of magnitude larger than this.
+ */
+static const int   kGoldenIrLen = 8192;
+static const int   kGoldenIrModes = 5; /* Room, Hall, Plate, Cathedral, Spring */
+static const float kGoldenIrTolerance = 1e-3f;
+
+#ifndef LOUDIO_REVERB_GOLDEN_DIR
+#define LOUDIO_REVERB_GOLDEN_DIR "test/golden"
+#endif
+
+static std::string goldenIrPath(int mode) {
+    return std::string(LOUDIO_REVERB_GOLDEN_DIR) + "/ir_mode" + std::to_string(mode) + ".f32";
+}
+
+static void renderImpulseResponse(int mode, std::vector<float>& left, std::vector<float>& right) {
+    ReverbCore core;
+    core.setParameterValueDirect(kParamMode, (float)mode);
+    core.setParameterValueDirect(kParamDryWet, 1.0f);
+    /* prepare() snaps every smoother to its current parameter, so there is
+     * no ramp at the start of the IR. */
+    core.prepare(44100.0, kGoldenIrLen);
+
+    left.assign(kGoldenIrLen, 0.0f);
+    right.assign(kGoldenIrLen, 0.0f);
+    left[0] = 1.0f;
+    right[0] = 1.0f;
+    core.process(left.data(), right.data(), kGoldenIrLen);
+}
+
+void regenerateGoldenImpulseResponses() {
+    for (int mode = 0; mode < kGoldenIrModes; ++mode) {
+        std::vector<float> left, right;
+        renderImpulseResponse(mode, left, right);
+        std::string path = goldenIrPath(mode);
+        FILE* f = std::fopen(path.c_str(), "wb");
+        if (!f) {
+            std::cerr << "Cannot write " << path << std::endl;
+            std::exit(1);
+        }
+        std::fwrite(left.data(), sizeof(float), left.size(), f);
+        std::fwrite(right.data(), sizeof(float), right.size(), f);
+        std::fclose(f);
+        std::cout << "  Wrote " << path << std::endl;
+    }
+}
+
+void testReverbCoreImpulseResponseMatchesGolden() {
+    std::cout << "Running testReverbCoreImpulseResponseMatchesGolden..." << std::endl;
+
+    float worstResidual = 0.0f;
+    for (int mode = 0; mode < kGoldenIrModes; ++mode) {
+        std::string path = goldenIrPath(mode);
+        FILE* f = std::fopen(path.c_str(), "rb");
+        if (!f) {
+            std::cerr << "  Missing golden IR " << path << " (run dsp_tests --regen-golden to create it)" << std::endl;
+        }
+        assert(f != nullptr);
+
+        std::vector<float> refLeft(kGoldenIrLen), refRight(kGoldenIrLen);
+        size_t gotL = std::fread(refLeft.data(), sizeof(float), kGoldenIrLen, f);
+        size_t gotR = std::fread(refRight.data(), sizeof(float), kGoldenIrLen, f);
+        std::fclose(f);
+        assert(gotL == (size_t)kGoldenIrLen && gotR == (size_t)kGoldenIrLen);
+
+        std::vector<float> left, right;
+        renderImpulseResponse(mode, left, right);
+
+        float refPeak = 0.0f, residual = 0.0f;
+        for (int i = 0; i < kGoldenIrLen; ++i) {
+            refPeak = std::max(refPeak, std::max(std::abs(refLeft[i]), std::abs(refRight[i])));
+            residual = std::max(residual, std::abs(left[i] - refLeft[i]));
+            residual = std::max(residual, std::abs(right[i] - refRight[i]));
+        }
+        /* A zeroed or truncated golden must not pass vacuously. */
+        assert(refPeak > 0.01f);
+        assert(residual < kGoldenIrTolerance);
+        worstResidual = std::max(worstResidual, residual);
+    }
+
+    std::cout << "  Impulse responses for all " << kGoldenIrModes << " modes null against test/golden/ within "
+              << kGoldenIrTolerance << " (worst residual " << worstResidual << "). Pass." << std::endl;
+}
+
+int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--regen-golden") {
+        std::cout << "Regenerating golden impulse responses..." << std::endl;
+        regenerateGoldenImpulseResponses();
+        return 0;
+    }
+
     std::cout << "==============================" << std::endl;
     std::cout << "Starting Loudio Reverb DSP Tests" << std::endl;
     std::cout << "==============================" << std::endl;
 
     try {
+        testDelayLineFractionalReadAcrossWrap();
         testHouseholderUnitary();
         testFDNStability();
         testCrossoverSum();
@@ -542,6 +693,7 @@ int main() {
         testReverbCoreFreezeSustainsEnergy();
         testReverbCoreStateRoundTrip();
         testReverbCoreAnalyzerFrameDirtyFlagLifecycle();
+        testReverbCoreImpulseResponseMatchesGolden();
         std::cout << "All DSP tests passed successfully!" << std::endl;
         return 0;
     } catch (const std::exception& e) {
