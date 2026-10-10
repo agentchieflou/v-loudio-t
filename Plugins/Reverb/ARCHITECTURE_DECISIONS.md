@@ -45,5 +45,6 @@ Decided in Epic #97 and built in #106 (B1), #108 (B2), #109 (B3), #111/#114 (B4)
 - **LPI** (`PluginABI/include/lpi/lpi.h`) is a plain-C ABI: one exported `lpi_get_factory`, a per-type vtable, and string-id extensions for capabilities. Parameters and state are keyed by string id, never by index.
 - **Editor delivery for noprod** is the `lpi.gui.offscreen.v1` extension. cuif renders into an FBO (`cuif_window_create_offscreen`), the host pulls top-left RGBA8 frames with `read_pixels`, and it relays logical-pixel mouse events back. All GUI calls and `set_parameter_value` run on one host thread. v1 allows one open editor per process.
 - **VST3 hosts (Ableton, Reaper, …)** keep the native-window editor through JUCE, as in §3.
-- **Known gaps:** see the LPI ABI follow-ups (transport/tempo, latency reporting, bypass, MIDI and sidechain are not in v1), and the shared UI builder/`ParamBridge` that B3 planned but never built. The VST3 editor and the LPI editor currently each construct the widget tree.
+- **Extensions beyond the editor:** `lpi.latency.v1` (delay compensation) and `lpi.params.changes.v1` (editor-originated parameter changes with gesture begin/end, pull-based) — #120, built to the noprod host's stated needs. Bypass, transport/tempo, MIDI and sidechain are deliberately not built until a host needs them.
+- **Shared editor:** both editors build the same widget tree via `ReverbUi` (#119), which sends edits through a host-supplied callback.
 
