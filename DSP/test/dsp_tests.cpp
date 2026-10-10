@@ -25,6 +25,7 @@
 #include "loudio/dsp/FeedbackPath.h"
 #include "loudio/dsp/ModulatedDelay.h"
 #include "loudio/dsp/AllPassStage.h"
+#include "loudio/dsp/Oversampler.h"
 #include "loudio/plugin/ParamTable.h"
 #include "loudio/plugin/StateBlob.h"
 #include "loudio/plugin/ParamQueue.h"
@@ -874,6 +875,134 @@ void testTransportDivisionHelpers() {
     std::cout << "  Division <-> Hz/seconds at 120 and 90 bpm, phase at ppq wraps, flag accessors. Pass." << std::endl;
 }
 
+/* ------------------------------------------------------------------------
+ * loudio/dsp Oversampler (P8, #134)
+ * ---------------------------------------------------------------------- */
+
+/* Magnitude in dB of one FFT bin of a Hann-windowed 4096-point frame. */
+static float binDb(const std::vector<float>& x, int bin) {
+    const int N = 4096;
+    SimpleFFT fft(12);
+    std::vector<float> data((size_t)N * 2, 0.0f);
+    for (int n = 0; n < N; ++n) {
+        float w = 0.5f - 0.5f * std::cos(2.0f * (float)M_PI * (float)n / (float)(N - 1));
+        data[(size_t)(2 * n)] = x[(size_t)n] * w;
+    }
+    fft.performRealOnlyForwardTransform(data.data());
+    float re = data[(size_t)(2 * bin)], im = data[(size_t)(2 * bin + 1)];
+    return loudio::gainToDb(std::sqrt(re * re + im * im));
+}
+
+template <int F>
+static void roundTripSine(float hz, double fs, int length, std::vector<float>& out, int block = 128) {
+    loudio::Oversampler<F> os;
+    os.prepare(block);
+    out.assign((size_t)length, 0.0f);
+    std::vector<float> in((size_t)length);
+    /* Double-precision phase: a float sin() argument of 2*pi*5000*48000 is
+     * only accurate to ~1e-3 rad, far above the -80 dB this test needs. */
+    for (int n = 0; n < length; ++n) in[(size_t)n] = (float)std::sin(2.0 * M_PI * (double)hz * (double)n / fs);
+    for (int start = 0; start < length; start += block) {
+        int n = std::min(block, length - start);
+        float* up = os.upsample(in.data() + start, n);
+        os.downsample(up, out.data() + start, n);
+    }
+}
+
+void testOversamplerRoundTripNullsInPassband() {
+    std::cout << "Running testOversamplerRoundTripNullsInPassband..." << std::endl;
+
+    const double fs = 48000.0;
+    const int length = 48000;
+    for (float hz : { 100.0f, 1000.0f, 5000.0f, 12000.0f }) {
+        std::vector<float> out2, out4;
+        roundTripSine<2>(hz, fs, length, out2);
+        roundTripSine<4>(hz, fs, length, out4);
+        /* Compare against the input delayed by the reported latency, after
+         * the filters have settled. */
+        float worst2 = 0.0f, worst4 = 0.0f;
+        for (int n = 2000; n < length; ++n) {
+            float ref2 = (float)std::sin(2.0 * M_PI * (double)hz * (double)(n - loudio::Oversampler<2>::latencySamples()) / fs);
+            float ref4 = (float)std::sin(2.0 * M_PI * (double)hz * (double)(n - loudio::Oversampler<4>::latencySamples()) / fs);
+            worst2 = std::max(worst2, std::abs(out2[(size_t)n] - ref2));
+            worst4 = std::max(worst4, std::abs(out4[(size_t)n] - ref4));
+        }
+        if (worst2 >= 1e-4f || worst4 >= 1e-4f) std::cerr << "  " << hz << " Hz: residual 2x " << worst2 << " 4x " << worst4 << std::endl;
+        assert(worst2 < 1e-4f); /* -80 dB */
+        assert(worst4 < 1e-4f);
+    }
+
+    std::cout << "  Up->down of sines from 100 Hz to 12 kHz nulls against the latency-delayed input within -80 dB, 2x and 4x. Pass." << std::endl;
+}
+
+void testOversamplerReportedLatencyMatchesImpulse() {
+    std::cout << "Running testOversamplerReportedLatencyMatchesImpulse..." << std::endl;
+
+    auto check = [](auto& os, int expected) {
+        os.prepare(64);
+        std::vector<float> in(256, 0.0f), out(256, 0.0f);
+        in[0] = 1.0f;
+        for (int start = 0; start < 256; start += 64) {
+            float* up = os.upsample(in.data() + start, 64);
+            os.downsample(up, out.data() + start, 64);
+        }
+        int peak = 0;
+        for (int n = 1; n < 256; ++n) if (std::abs(out[(size_t)n]) > std::abs(out[(size_t)peak])) peak = n;
+        assert(peak == expected);
+        assert(approxEqual(out[(size_t)peak], 0.966f, 0.02f)); /* linear phase: the impulse comes through intact minus the energy above the passband edge */
+    };
+    loudio::Oversampler<2> os2;
+    loudio::Oversampler<4> os4;
+    assert(loudio::Oversampler<2>::latencySamples() == 32);
+    assert(loudio::Oversampler<4>::latencySamples() == 48);
+    check(os2, 32);
+    check(os4, 48);
+
+    std::cout << "  An impulse peaks exactly latencySamples() later: 32 (2x) and 48 (4x). Pass." << std::endl;
+}
+
+void testOversampledTanhSuppressesAliasing() {
+    std::cout << "Running testOversampledTanhSuppressesAliasing..." << std::endl;
+
+    /* Full-scale tanh(3 x) of a 4687.5 Hz sine at 48 kHz (bin 400 of a
+     * 4096-point frame). Its 7th and 9th harmonics (32.8 kHz, 42.2 kHz)
+     * alias to bins 1296 and 496 at the base rate; at 4x they are real
+     * frequencies that the decimation filter removes. */
+    const double fs = 48000.0;
+    const int N = 4096, total = 4096 * 3;
+    const float hz = 4687.5f;
+    const int kFund = 400, kAlias7 = 1296, kAlias9 = 496;
+    auto drive = [](float x) { return std::tanh(3.0f * x); };
+
+    std::vector<float> in((size_t)total), plain((size_t)total), over((size_t)total, 0.0f);
+    for (int n = 0; n < total; ++n) {
+        in[(size_t)n] = (float)std::sin(2.0 * M_PI * (double)hz * (double)n / fs);
+        plain[(size_t)n] = drive(in[(size_t)n]);
+    }
+    loudio::Oversampler<4> os;
+    const int block = 256;
+    os.prepare(block);
+    for (int start = 0; start < total; start += block) {
+        float* up = os.upsample(in.data() + start, block);
+        for (int i = 0; i < block * 4; ++i) up[i] = drive(up[i]);
+        os.downsample(up, over.data() + start, block);
+    }
+
+    /* Analyse the last frame (filters settled). */
+    std::vector<float> plainFrame(plain.end() - N, plain.end()), overFrame(over.end() - N, over.end());
+    float fundPlain = binDb(plainFrame, kFund), fundOver = binDb(overFrame, kFund);
+    float alias7Plain = binDb(plainFrame, kAlias7) - fundPlain, alias9Plain = binDb(plainFrame, kAlias9) - fundPlain;
+    float alias7Over = binDb(overFrame, kAlias7) - fundOver, alias9Over = binDb(overFrame, kAlias9) - fundOver;
+    std::cout << "  aliases rel. fundamental: plain 7th " << alias7Plain << " dB, 9th " << alias9Plain
+              << " dB; 4x oversampled 7th " << alias7Over << " dB, 9th " << alias9Over << " dB" << std::endl;
+    assert(alias7Plain > -50.0f); /* the test has teeth: without oversampling the aliases are audible */
+    assert(alias7Over < -60.0f);
+    assert(alias9Over < -60.0f);
+    assert(approxEqual(fundOver, fundPlain, 1.0f)); /* the wanted signal is untouched */
+
+    std::cout << "  4x oversampled tanh: aliased 7th/9th harmonics below -60 dB (vs. > -50 dB without). Pass." << std::endl;
+}
+
 int main() {
     std::cout << "==============================" << std::endl;
     std::cout << "Starting Loudio DSP component tests" << std::endl;
@@ -899,6 +1028,9 @@ int main() {
     testModulatedDelayMatchesPlainDelayAndFeedsBack();
     testFeedbackPathStaysBounded();
     testTransportDivisionHelpers();
+    testOversamplerRoundTripNullsInPassband();
+    testOversamplerReportedLatencyMatchesImpulse();
+    testOversampledTanhSuppressesAliasing();
 
     std::cout << "All DSP component tests passed successfully!" << std::endl;
     return 0;
