@@ -111,6 +111,14 @@ if(LOUDIO_REVERB_BUILD_LPI AND WIN32)
         RUNTIME_OUTPUT_DIRECTORY "${LPI_REVERB_OUTPUT_DIR}"
     )
 
+    # PluginABI's generic conformance suite, run here against lpi_reverb.dll.
+    add_executable(lpi_conformance ../../PluginABI/test/conformance/lpi_conformance.c)
+    target_include_directories(lpi_conformance PRIVATE ../../PluginABI/include)
+    add_dependencies(lpi_conformance lpi_reverb)
+    set_target_properties(lpi_conformance PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${LPI_REVERB_OUTPUT_DIR}"
+    )
+
     add_executable(lpi_reverb_gui_harness test/lpi_reverb_gui_harness.c)
     target_include_directories(lpi_reverb_gui_harness PRIVATE ../../PluginABI/include)
     add_dependencies(lpi_reverb_gui_harness lpi_reverb)

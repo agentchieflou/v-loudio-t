@@ -60,6 +60,9 @@ jobs:
       - name: lpi_rt_safety_test
         working-directory: build/abi/bin/Debug
         run: ./lpi_rt_safety_test.exe
+      - name: lpi_conformance (toy gain)
+        working-directory: build/abi/bin/Debug
+        run: ./lpi_conformance.exe lpi_toy_gain.dll
 
   reverb:
     runs-on: windows-latest
@@ -77,7 +80,7 @@ jobs:
       - name: Configure
         run: cmake -S VSTs/Reverb -B build/reverb
       - name: Build tests + LPI plugin
-        run: cmake --build build/reverb --config Debug --target dsp_tests lpi_reverb lpi_reverb_gui_harness
+        run: cmake --build build/reverb --config Debug --target dsp_tests lpi_reverb lpi_reverb_gui_harness lpi_conformance
       - name: dsp_tests
         working-directory: build/reverb/Debug
         run: ./dsp_tests.exe
@@ -87,6 +90,9 @@ jobs:
       - name: lpi_reverb_gui_harness
         working-directory: build/reverb/bin/Debug
         run: ./lpi_reverb_gui_harness.exe
+      - name: lpi_conformance (reverb)
+        working-directory: build/reverb/bin/Debug
+        run: ./lpi_conformance.exe lpi_reverb.dll
       - name: Upload LPI GUI frames
         if: always()
         uses: actions/upload-artifact@v4

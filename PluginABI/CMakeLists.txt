@@ -40,6 +40,14 @@ if(LPI_BUILD_TESTS AND LPI_BUILD_EXAMPLES)
         RUNTIME_OUTPUT_DIRECTORY "${LPI_SHARED_OUTPUT_DIR}"
     )
 
+    # Generic contract checks against any LPI plugin DLL (also vendorable by hosts).
+    add_executable(lpi_conformance test/conformance/lpi_conformance.c)
+    target_link_libraries(lpi_conformance PRIVATE lpi_abi)
+    add_dependencies(lpi_conformance lpi_toy_gain)
+    set_target_properties(lpi_conformance PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${LPI_SHARED_OUTPUT_DIR}"
+    )
+
     add_executable(lpi_rt_safety_test test/rt_safety/rt_safety_test.c)
     target_link_libraries(lpi_rt_safety_test PRIVATE lpi_abi)
     add_dependencies(lpi_rt_safety_test lpi_toy_gain)
