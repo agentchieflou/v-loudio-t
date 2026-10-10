@@ -1,5 +1,21 @@
 # Architecture & Implementation Blueprint: Advanced Vocal Pitch Correction Engine
 
+> **Platform amendment (#146, decided with the implementation in
+> `VSTs/AutoTune`).** v1 is built entirely in-house on the plugin platform:
+> `loudio::PitchDetectorYin` (steps 1–5 of de Cheveigné & Kawahara, no
+> decimation, 1024-sample window, once per 256-sample hop), key/scale
+> quantisation with retune speed and humanise, and `loudio::PsolaShifter`
+> (streaming TD-PSOLA with fractional pitch marks and window-sum
+> normalisation; formant shift by resampling each segment around its
+> mark). None of the open-source stacks in §2 are used (PytoTune, QPitch,
+> Essentia, Bungee, Rubber Band are not available to the LPI build) and
+> the deep-learning tracker (§2C) is out of scope. Latency is fixed at
+> 2048 + fs/60 samples (2848 at 48 kHz), reported through
+> `lpi.latency.v1`; the golden-IR null test does not apply (time-variant).
+> Measured: YIN within 0.2 cents on harmonic tones from 110 to 880 Hz; a
+> sharp A lands on A4 within 0.3 cents; unvoiced material passes through
+> within 1e-4.
+
 This document outlines the architectural specification and implementation strategy for a production-grade, ultra-low-latency real-time vocal pitch correction plugin (**AutoTune**). It integrates state-of-the-art open-source audio toolchains and digital signal processing (DSP) research papers.
 
 ---
