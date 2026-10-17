@@ -79,10 +79,13 @@ jobs:
     timeout-minutes: 5
     outputs:
       list: ${{ steps.list.outputs.list }}
+      vst3sdk: ${{ steps.list.outputs.vst3sdk }}
     steps:
       - uses: actions/checkout@v4
       - id: list
-        run: echo "list=$(python3 tools/list_plugins.py)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "list=$(python3 tools/list_plugins.py)" >> "$GITHUB_OUTPUT"
+          echo "vst3sdk=$(python3 tools/list_plugins.py --vst3sdk)" >> "$GITHUB_OUTPUT"
 
   plugin:
     needs: plugins
@@ -126,8 +129,50 @@ jobs:
           name: lpi-${{ matrix.plugin.lower }}-frames
           path: build/plugin/bin/Debug/*.ppm
           if-no-files-found: ignore
-      - name: Build VST3 + Standalone
+      # JUCE plugins only; a plugin on the VST3 SDK (#171) builds and
+      # validates its VST3 in the vst3 job below, on all three platforms.
+      - name: Build VST3 + Standalone (JUCE)
+        if: ${{ !matrix.plugin.vst3sdk }}
         run: cmake --build build/plugin --config Debug --target Loudio${{ matrix.plugin.name }}_VST3 Loudio${{ matrix.plugin.name }}_Standalone
+
+  # Plugins built on the VST3 SDK directly (#171, ThirdParty/vst3sdk; no
+  # JUCE, no submodule): the VST3 bundle, the SDK's validator in extensive
+  # mode, and the plugin's VST3 tests (state, buses, same sound as its core
+  # and, on Windows, as its LPI build) on Windows, macOS and Linux.
+  vst3:
+    needs: plugins
+    if: ${{ needs.plugins.outputs.vst3sdk != '[]' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        plugin: ${{ fromJson(needs.plugins.outputs.vst3sdk) }}
+    name: vst3 (${{ matrix.plugin.name }}, ${{ matrix.os }})
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S VSTs/${{ matrix.plugin.name }} -B build/vst3 -DCMAKE_BUILD_TYPE=Debug
+      - name: Build VST3 + tests
+        run: cmake --build build/vst3 --config Debug --parallel --target Loudio${{ matrix.plugin.name }}_VST3 vst3_${{ matrix.plugin.lower }}_tests
+      - name: VST3 validator
+        run: cmake --build build/vst3 --config Debug --target Loudio${{ matrix.plugin.name }}_VST3_validate
+      - name: VST3 tests
+        if: runner.os != 'Windows'
+        run: ./build/vst3/vst3_${{ matrix.plugin.lower }}_tests
+      - name: Build LPI plugin
+        if: runner.os == 'Windows'
+        run: cmake --build build/vst3 --config Debug --target lpi_${{ matrix.plugin.lower }}
+      - name: VST3 tests (+ same sound as LPI)
+        if: runner.os == 'Windows'
+        run: ./build/vst3/Debug/vst3_${{ matrix.plugin.lower }}_tests.exe build/vst3/bin/Debug/lpi_${{ matrix.plugin.lower }}.dll
+      - name: Upload VST3 bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: vst3-${{ matrix.plugin.lower }}-${{ runner.os }}
+          path: build/vst3/VST3/Debug/
+          if-no-files-found: error
 
   # Fast, GPU-free, JUCE-free DSP feedback: the shared DSP component tests
   # and every plugin's DSP tests (which need neither Windows nor JUCE) in
