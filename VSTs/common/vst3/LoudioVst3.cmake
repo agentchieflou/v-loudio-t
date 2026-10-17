@@ -39,16 +39,28 @@ endif()
 set(public_sdk_SOURCE_DIR ${LOUDIO_VST3SDK_DIR}/public.sdk)
 
 # For test hosts that load a built bundle through VST3::Hosting::Module:
-# the platform's module loader, which the SDK leaves to each host.
-if(APPLE)
-    set(LOUDIO_VST3_HOSTING_MODULE_SOURCE ${LOUDIO_VST3SDK_DIR}/public.sdk/source/vst/hosting/module_mac.mm)
-    set_source_files_properties(${LOUDIO_VST3_HOSTING_MODULE_SOURCE} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-    find_library(LOUDIO_COCOA_FRAMEWORK Cocoa)
-    set(LOUDIO_VST3_HOSTING_LIBS ${LOUDIO_COCOA_FRAMEWORK})
-elseif(WIN32)
-    set(LOUDIO_VST3_HOSTING_MODULE_SOURCE ${LOUDIO_VST3SDK_DIR}/public.sdk/source/vst/hosting/module_win32.cpp)
-else()
-    set(LOUDIO_VST3_HOSTING_MODULE_SOURCE ${LOUDIO_VST3SDK_DIR}/public.sdk/source/vst/hosting/module_linux.cpp)
+# the platform's module loader (which the SDK leaves to each host) and
+# MemoryStream, as C++17 like the SDK itself -- module_win32.cpp does not
+# compile as C++20 (u8path() returns a char8_t string there).
+if(NOT TARGET loudio_vst3_hosting)
+    if(APPLE)
+        set(module_source ${LOUDIO_VST3SDK_DIR}/public.sdk/source/vst/hosting/module_mac.mm)
+        set_source_files_properties(${module_source} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    elseif(WIN32)
+        set(module_source ${LOUDIO_VST3SDK_DIR}/public.sdk/source/vst/hosting/module_win32.cpp)
+    else()
+        set(module_source ${LOUDIO_VST3SDK_DIR}/public.sdk/source/vst/hosting/module_linux.cpp)
+    endif()
+    add_library(loudio_vst3_hosting STATIC
+        ${module_source}
+        ${LOUDIO_VST3SDK_DIR}/public.sdk/source/common/memorystream.cpp
+    )
+    set_target_properties(loudio_vst3_hosting PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    target_link_libraries(loudio_vst3_hosting PUBLIC sdk_hosting)
+    if(APPLE)
+        find_library(LOUDIO_COCOA_FRAMEWORK Cocoa)
+        target_link_libraries(loudio_vst3_hosting PUBLIC ${LOUDIO_COCOA_FRAMEWORK})
+    endif()
 endif()
 
 function(loudio_add_vst3_plugin target)

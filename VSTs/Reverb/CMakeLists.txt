@@ -35,13 +35,8 @@ loudio_add_vst3_plugin(LoudioReverb_VST3
 
 # Same sound (#171): the built bundle, hosted through the SDK's hosting
 # classes, against ReverbCore run directly and (Windows) lpi_reverb.dll.
-add_executable(vst3_reverb_tests
-    test/vst3_reverb_tests.cpp
-    src/ReverbCore.cpp
-    ${LOUDIO_VST3SDK_DIR}/public.sdk/source/common/memorystream.cpp
-    ${LOUDIO_VST3_HOSTING_MODULE_SOURCE}
-)
-target_link_libraries(vst3_reverb_tests PRIVATE sdk_hosting ${LOUDIO_VST3_HOSTING_LIBS})
+add_executable(vst3_reverb_tests test/vst3_reverb_tests.cpp src/ReverbCore.cpp)
+target_link_libraries(vst3_reverb_tests PRIVATE loudio_vst3_hosting)
 target_include_directories(vst3_reverb_tests PRIVATE src ../common ../../Framework/include ${LOUDIO_DSP_INCLUDE} ../../PluginABI/include)
 target_compile_features(vst3_reverb_tests PRIVATE cxx_std_20)
 get_target_property(LOUDIO_REVERB_VST3_BUNDLE LoudioReverb_VST3 LOUDIO_VST3_BUNDLE)
