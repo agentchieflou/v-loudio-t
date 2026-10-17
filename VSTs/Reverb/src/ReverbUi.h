@@ -6,12 +6,12 @@
 
 /*
  * The Reverb editor's widget tree, built once here and shared by both
- * editors: the VST3/JUCE editor (VSTs/common/LoudioEditor.h, native child window) and
- * the LPI wrapper's offscreen editor (lpi_reverb.cpp). JUCE-free.
+ * editors: the VST3 editor (VSTs/common/vst3/LoudioVst3.h, native child
+ * window) and the LPI wrapper's offscreen editor (lpi_reverb.cpp). JUCE-free.
  *
  * The UI never writes parameters itself. Every edit goes out through
  * ReverbUiCallbacks::sendParams, so each host keeps its own RT-safe path to
- * the DSP (the JUCE editor's all-or-nothing UI->DSP ring buffer; the LPI
+ * the DSP (the VST3 editor's beginEdit/performEdit/endEdit; the LPI
  * wrapper's ReverbCore::setParameterValue queue). sendParams may receive
  * several messages that belong together (the decay-EQ curve's three nodes)
  * and should deliver all of them or none.
