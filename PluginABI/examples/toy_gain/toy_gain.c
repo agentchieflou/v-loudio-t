@@ -6,9 +6,8 @@
  * Demonstrates the intended real pattern for RT-safe parameter updates:
  * set_parameter_value() (called from any thread) enqueues into a lock-free
  * SPSC ring buffer; process() (the real-time audio thread) drains it at the
- * top of each block before using the value. This mirrors
- * VSTs/Reverb/src/PluginProcessor.cpp's ParamUpdateMessage/uiToDspRingBuffer
- * pattern exactly.
+ * top of each block before using the value. This mirrors the plugin
+ * cores' loudio::ParamQueue (DSP/include/loudio/plugin/ParamQueue.h).
  */
 
 #include "lpi/lpi.h"
