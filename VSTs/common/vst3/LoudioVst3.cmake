@@ -56,6 +56,7 @@ if(NOT TARGET loudio_vst3_hosting)
         ${LOUDIO_VST3SDK_DIR}/public.sdk/source/common/memorystream.cpp
     )
     set_target_properties(loudio_vst3_hosting PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    target_compile_options(loudio_vst3_hosting PUBLIC $<$<CXX_COMPILER_ID:MSVC>:/Zc:__cplusplus>)
     target_link_libraries(loudio_vst3_hosting PUBLIC sdk_hosting)
     if(APPLE)
         find_library(LOUDIO_COCOA_FRAMEWORK Cocoa)
@@ -89,6 +90,10 @@ function(loudio_add_vst3_plugin target)
         ${LOUDIO_ROOT_DIR}/DSP/include
     )
     target_compile_features(${target} PRIVATE cxx_std_20)
+    # The SDK's headers pick C++17/20 code paths from __cplusplus, which
+    # MSVC only reports truthfully with /Zc:__cplusplus (the SDK sets it
+    # for its own targets).
+    target_compile_options(${target} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/Zc:__cplusplus>)
     # Only the SDK's entry points (SMTG_EXPORT_SYMBOL) leave the module.
     set_target_properties(${target} PROPERTIES
         C_VISIBILITY_PRESET hidden
