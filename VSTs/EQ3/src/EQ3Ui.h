@@ -5,7 +5,7 @@
 #include <cstddef>
 
 /*
- * EQ-3 widget tree (#145), shared by the VST3 editor (VSTs/common) and
+ * EQ-3 widget tree (#145), shared by the VST3 editor (VSTs/common/vst3) and
  * the LPI offscreen editor (PluginABI/wrapper). JUCE-free; UI thread only.
  *
  * Layout (logical px, 520 x 300): three vertical faders (low, mid, high

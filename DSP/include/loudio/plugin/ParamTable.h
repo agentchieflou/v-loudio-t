@@ -11,14 +11,14 @@
  * A plugin declares ONE static array of ParamMeta -- the single source of
  * truth for every parameter's stable id string, display name, range,
  * default, step and flags -- and wraps it in a ParamTable. Everything
- * else (the LPI wrapper's lpi_parameter_info, the JUCE wrapper's
- * createParameterLayout(), the state blob, the UI mapping) reads from that
+ * else (the LPI wrapper's lpi_parameter_info, the VST3 shell's parameter
+ * objects, the state blob, the UI mapping) reads from that
  * one list, so the numbers can't drift the way two hand-maintained lists
  * eventually would.
  *
  * Bool/choice parameters are represented the same way as every other
  * parameter: a plain float range plus a flag. Format-specific display
- * concerns (JUCE's AudioParameterChoice labels, LPI's LPI_PARAM_STEPPED)
+ * concerns (the VST3 list parameters' labels, LPI's LPI_PARAM_STEPPED)
  * are layered on top by the wrappers.
  *
  * Order matters: entries[i].index must equal i (checked by

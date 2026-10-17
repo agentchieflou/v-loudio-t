@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Scaffold a new plugin under VSTs/<Name> on the plugin platform (P4, #130).
 
-    tools/new_plugin.py <Name> [--id com.loudio.<name>] [--code Xxx1] [--product "Loudio <Name>"]
+    tools/new_plugin.py <Name> [--id com.loudio.<name>] [--product "Loudio <Name>"]
 
 Generates a complete, buildable plugin that passes every test before any
 DSP is written: a core on the P1 contract (DSP/include/loudio/plugin) with
 a one-parameter table (gain) and a transport hook, a one-knob cuif UI, the
-LPI build on the P2 wrapper template, the VST3/Standalone build on the P3
-shared JUCE wrapper, DSPTests.cpp wired to the generic core test kit
-(golden IR with --regen-golden, zero-allocation hook, state round-trip),
-the LPI offscreen GUI harness, the golden IR for the pass-through core,
-and the plugin's CMakeLists.txt. CI picks the plugin up automatically
+LPI build on the P2 wrapper template, the VST3 build on the VST3 SDK shell
+(VSTs/common/vst3, #171) with its bundle tests, DSPTests.cpp wired to the
+generic core test kit (golden IR with --regen-golden, zero-allocation
+hook, state round-trip), the LPI offscreen GUI harness, the golden IR for
+the pass-through core, and the plugin's CMakeLists.txt. CI picks the plugin up automatically
 (tools/list_plugins.py); deleting VSTs/<Name> leaves no trace.
 
 Plain Python 3, no dependencies (spike §5.6 decision).
@@ -20,16 +20,17 @@ import pathlib
 import re
 import struct
 import sys
+import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # --------------------------------------------------------------------------
 # Templates. Tokens: @Name@ (Scratch), @lower@ (scratch), @upper@ (SCRATCH),
-# @id@ (com.loudio.scratch), @code@ (Scr1), @product@ (Loudio Scratch),
-# @magic@ (4-char state magic).
+# @id@ (com.loudio.scratch), @product@ (Loudio Scratch), @magic@ (4-char
+# state magic), @processorUid@ / @controllerUid@ (fresh VST3 class IDs).
 # --------------------------------------------------------------------------
 
-CMAKE = r'''cmake_minimum_required(VERSION 3.21)
+CMAKE = r'''cmake_minimum_required(VERSION 3.25)
 project(Loudio@Name@ VERSION 0.1.0)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -48,62 +49,26 @@ set(LOUDIO_CUIF_SOURCES
     ${LOUDIO_FRAMEWORK_SRC}/theme_greens.c
 )
 
-# ON: build only dsp_tests -- no JUCE, no plugin targets (the Linux CI job).
-option(LOUDIO_PLUGIN_TESTS_ONLY "Build only the DSP tests (skips JUCE and all plugin targets)" OFF)
+# ON: build only dsp_tests -- no VST3 SDK, no plugin targets (the Linux CI job).
+option(LOUDIO_PLUGIN_TESTS_ONLY "Build only the DSP tests (skips the VST3 SDK and all plugin targets)" OFF)
 
 if(NOT LOUDIO_PLUGIN_TESTS_ONLY)
-# The JUCE submodule is shared by every plugin: VSTs/JUCE.
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../JUCE ${CMAKE_BINARY_DIR}/juce)
+# VST3 on the VST3 SDK directly (#171, VSTs/common/vst3), on Windows, macOS
+# and Linux; the cuif editor is Windows-only, like cuif itself.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../common/vst3/LoudioVst3.cmake)
 
-juce_add_plugin(Loudio@Name@
-    PRODUCT_NAME "@product@"
-    COMPANY_NAME "Loudio"
-    PLUGIN_MANUFACTURER_CODE Loud
-    PLUGIN_CODE @code@
-    FORMATS VST3 Standalone
-    VST3_CATEGORIES Fx
-    IS_SYNTH FALSE
-    NEEDS_MIDI_INPUT FALSE
-    NEEDS_MIDI_OUTPUT FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+loudio_add_vst3_plugin(Loudio@Name@_VST3
+    PACKAGE_NAME "@product@"
+    SOURCES
+        src/vst3_@lower@.cpp
+        src/@Name@Core.cpp
+    EDITOR_SOURCES
+        src/@Name@Ui.cpp
 )
-
-juce_generate_juce_header(Loudio@Name@)
-
-target_sources(Loudio@Name@ PRIVATE
-    src/PluginProcessor.cpp
-    src/@Name@Ui.cpp
+loudio_add_vst3_tests(vst3_@lower@_tests Loudio@Name@_VST3
+    test/vst3_@lower@_tests.cpp
     src/@Name@Core.cpp
-    ${LOUDIO_CUIF_SOURCES}
 )
-
-target_include_directories(Loudio@Name@ PRIVATE src ../common ../../Framework/include ${LOUDIO_DSP_INCLUDE})
-
-target_compile_definitions(Loudio@Name@ PUBLIC
-    JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
-    JUCE_VST3_CAN_REPLACE_VST2=0
-PRIVATE
-    # NOMINMAX: cuif/ring_buffer.h (via the core's ParamQueue) pulls in
-    # <windows.h>, whose min/max macros otherwise break std::min/std::max
-    # in the core. JUCE defines it itself (guarded), so no conflict.
-    NOMINMAX
-)
-
-target_link_libraries(Loudio@Name@ PRIVATE
-    juce::juce_dsp
-    juce::juce_gui_basics
-    opengl32
-PUBLIC
-    juce::juce_recommended_config_flags
-    juce::juce_recommended_lto_flags
-    juce::juce_recommended_warning_flags
-)
-
-# juce_audio_utils only for the Standalone's device/file glue (see Reverb, #94).
-if(TARGET Loudio@Name@_Standalone)
-    target_link_libraries(Loudio@Name@_Standalone PRIVATE juce::juce_audio_utils)
-endif()
 endif() # NOT LOUDIO_PLUGIN_TESTS_ONLY
 
 option(LOUDIO_@upper@_BUILD_TESTS "Build DSP unit tests executable" ON)
@@ -121,7 +86,7 @@ if(LOUDIO_@upper@_BUILD_TESTS)
     )
 endif()
 
-# LPI (Loudio Plugin Interface) build: no JUCE, on PluginABI/wrapper's template.
+# LPI (Loudio Plugin Interface) build, on PluginABI/wrapper's template.
 option(LOUDIO_@upper@_BUILD_LPI "Build the LPI-ABI DLL and its offscreen GUI test harness" ON)
 if(LOUDIO_@upper@_BUILD_LPI AND WIN32)
     set(LPI_OUTPUT_DIR "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
@@ -187,9 +152,9 @@ CORE_H = r'''#pragma once
 
 /*
  * @Name@'s DSP engine on the platform core contract
- * (DSP/include/loudio/plugin/CORE_CONTRACT.md). JUCE-free and LPI-free:
- * both wrappers (VSTs/common for VST3, PluginABI/wrapper for LPI) are
- * generated around it.
+ * (DSP/include/loudio/plugin/CORE_CONTRACT.md). Format-free: both wrappers
+ * (VSTs/common/vst3 for VST3, PluginABI/wrapper for LPI) are generated
+ * around it.
  *
  * Scaffold state: a stereo pass-through times `gain`. Replace process()
  * (and prepare()) with the real DSP, extend @Name@Params.h, then
@@ -215,7 +180,7 @@ public:
     bool setState(const void* data, size_t size);
 
     /* Host transport, once per block before process() (lpi.transport.v1 /
-     * JUCE playhead). Delete this if the plugin never needs tempo. */
+     * the VST3 ProcessContext). Delete this if the plugin never needs tempo. */
     void setTransport(const loudio::TransportInfo& t) { transport = t; }
 
 private:
@@ -289,7 +254,7 @@ UI_H = r'''#pragma once
 #include <cstddef>
 
 /*
- * @Name@'s widget tree, shared by the VST3 editor (VSTs/common) and the
+ * @Name@'s widget tree, shared by the VST3 editor (VSTs/common/vst3) and the
  * LPI offscreen editor (PluginABI/wrapper). JUCE-free; UI thread only.
  *
  * The UI never writes parameters itself: every edit goes out through
@@ -406,48 +371,66 @@ struct @Name@LpiTraits {
 LPI_DEFINE_PLUGIN(@Name@LpiTraits)
 '''
 
-PROCESSOR_H = r'''#pragma once
-
-#include "LoudioEditor.h" /* VSTs/common: LoudioProcessor + LoudioEditor templates */
-#include "@Name@Core.h"
-#include "@Name@Ui.h"
-
-/*
- * @Name@'s VST3/Standalone build on the shared JUCE wrapper (VSTs/common).
- * The APVTS layout, rings, cuif child window and DPI handling live in the
- * templates; this is only what makes it @Name@.
+VST3_CPP = r'''/*
+ * @Name@'s VST3 build on the VST3 SDK directly (VSTs/common/vst3, #171).
+ * Parameters, state, buses, latency and the Windows editor live in the
+ * shell; this is only what makes it @Name@.
  */
-struct @Name@VstTraits {
+#include "vst3/LoudioVst3.h"
+#include "@Name@Core.h"
+#ifdef LOUDIO_VST3_EDITOR
+#include "@Name@Ui.h"
+#endif
+
+struct @Name@Vst3Traits {
     using Core = @Name@Core;
+
+    static constexpr const char* kName = "@product@";
+    static constexpr const char* kVendor = "Loudio";
+    static constexpr const char* kUrl = "https://github.com/agentchieflou/v-loudio-t";
+    static constexpr const char* kEmail = "";
+    static constexpr const char* kCategories = "Fx";
+    static constexpr Steinberg::uint32 kProcessorUid[4] = { @processorUid@ };
+    static constexpr Steinberg::uint32 kControllerUid[4] = { @controllerUid@ };
+
+    /* Labels for kParamStepped parameters; none in the scaffold. */
+    static std::vector<const char*> choiceLabels(int) { return {}; }
+
+    /* DSP -> UI frames (meters, analyzers): none in the scaffold. */
+    static void afterProcess(Core&, cuif_spsc_ring_buffer&) {}
+
+#ifdef LOUDIO_VST3_EDITOR
     using Ui = @Name@Ui;
 
     static constexpr int kPanelWidth = k@Name@PanelWidth;
     static constexpr int kPanelHeight = k@Name@PanelHeight;
     static constexpr const char* kWindowTitle = "@product@";
 
-    /* Labels for kParamStepped parameters; none in the scaffold. */
-    static juce::StringArray choiceLabels(int) { return {}; }
-
-    static Ui* uiCreate(float w, float h, void* context, loudio::vst::SendParamsFn sendParams) {
+    static Ui* uiCreate(float w, float h, void* context, loudio::vst3::SendParamsFn sendParams) {
         return @lower@UiCreate(w, h, { context, sendParams });
     }
     static void uiDestroy(Ui* ui) { @lower@UiDestroy(ui); }
     static cuif_widget* uiRoot(Ui* ui) { return ui->root; }
     static void uiSyncFromParams(Ui* ui, const float* params) { @lower@UiSyncFromParams(ui, params); }
-
-    /* DSP -> UI frames (meters, analyzers): none in the scaffold. */
-    static void afterProcess(Core&, cuif_spsc_ring_buffer&) {}
     static void pollDspToUi(Ui*, cuif_spsc_ring_buffer&) {}
+#endif
 };
 
-using Loudio@Name@Processor = loudio::vst::LoudioProcessor<@Name@VstTraits>;
-using Loudio@Name@Editor = loudio::vst::LoudioEditor<@Name@VstTraits>;
+LOUDIO_VST3_DEFINE_PLUGIN(@Name@Vst3Traits)
 '''
 
-PROCESSOR_CPP = r'''#include "PluginProcessor.h"
+VST3_TESTS = r'''/*
+ * @Name@'s VST3 build, tested against the built bundle with the shared kit
+ * (VSTs/common/vst3/Vst3TestHost.h): factory, parameters, buses, latency,
+ * state, and the same sound as @Name@Core run directly and, given
+ * lpi_@lower@.dll (Windows CI), as the LPI build.
+ */
+#include "vst3/Vst3TestHost.h"
+#include "@Name@Core.h"
 
-juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() {
-    return new Loudio@Name@Processor();
+int main(int argc, char** argv) {
+    return loudio::vst3test::runVst3CoreTests<@Name@Core>(
+        LOUDIO_VST3_BUNDLE, "@product@", "Fx", LOUDIO_PLUGIN_VERSION, argc, argv);
 }
 '''
 
@@ -666,8 +649,8 @@ Scaffolded by `tools/new_plugin.py @Name@` on the plugin platform (#125).
 | DSP core (P1 contract) | `src/@Name@Core.{h,cpp}` |
 | cuif UI (shared by both editors) | `src/@Name@Ui.{h,cpp}` |
 | LPI build (P2 template) | `src/lpi_@lower@.cpp` |
-| VST3/Standalone build (P3 templates) | `src/PluginProcessor.{h,cpp}` |
-| Tests | `src/DSPTests.cpp` (generic kit + own), `test/lpi_@lower@_gui_harness.c`, `test/golden/` |
+| VST3 build (VST3 SDK, `VSTs/common/vst3`) | `src/vst3_@lower@.cpp` |
+| Tests | `src/DSPTests.cpp` (generic kit + own), `test/vst3_@lower@_tests.cpp`, `test/lpi_@lower@_gui_harness.c`, `test/golden/` |
 
 Next steps: write the DSP in `@Name@Core::process()`, grow the table,
 lay out the UI, add plugin-specific tests, then `dsp_tests --regen-golden`
@@ -678,13 +661,23 @@ Build (Windows, from the repo root):
 
     cmake -S VSTs/@Name@ -B build/@lower@
     cmake --build build/@lower@ --config Debug --target dsp_tests lpi_@lower@ lpi_@lower@_gui_harness lpi_conformance
-    cmake --build build/@lower@ --config Debug --target Loudio@Name@_VST3 Loudio@Name@_Standalone
+
+VST3 (Windows, macOS or Linux):
+
+    cmake -S VSTs/@Name@ -B build/@lower@-vst3 -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build/@lower@-vst3 --config Debug --target Loudio@Name@_VST3_validate vst3_@lower@_tests
 
 DSP tests only (any platform):
 
     cmake -S VSTs/@Name@ -B build/@lower@-tests -DLOUDIO_PLUGIN_TESTS_ONLY=ON
     cmake --build build/@lower@-tests --target dsp_tests && ./build/@lower@-tests/dsp_tests
 '''
+
+
+def vst3_uid():
+    """A fresh VST3 class ID as four 32-bit hex words."""
+    h = uuid.uuid4().hex.upper()
+    return ", ".join("0x" + h[i:i + 8] for i in range(0, 32, 8))
 
 
 def render(template, tokens):
@@ -701,7 +694,6 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("name", help="CamelCase plugin name, e.g. Compressor")
     ap.add_argument("--id", help="stable plugin id (default com.loudio.<name>)")
-    ap.add_argument("--code", help="4-character VST3 plugin code (default: first 3 letters + '1')")
     ap.add_argument("--product", help='display name (default "Loudio <Name>")')
     ap.add_argument("--force", action="store_true", help="overwrite an existing VSTs/<Name>")
     args = ap.parse_args()
@@ -710,16 +702,14 @@ def main():
     if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", name):
         sys.exit("name must be CamelCase starting with a capital letter, e.g. Compressor")
     lower = name.lower()
-    code = args.code or (name[:3].capitalize().ljust(3, "x") + "1")
-    if len(code) != 4:
-        sys.exit("--code must be exactly 4 characters")
     magic = (name[:4].upper()).ljust(4, "_")
     tokens = {
         "Name": name,
         "lower": lower,
         "upper": name.upper(),
         "id": args.id or ("com.loudio." + lower),
-        "code": code,
+        "processorUid": vst3_uid(),
+        "controllerUid": vst3_uid(),
         "product": args.product or ("Loudio " + name),
         "magic": "', '".join(magic),
         "panelW": 400,
@@ -741,8 +731,8 @@ def main():
         f"src/{name}Ui.h": UI_H,
         f"src/{name}Ui.cpp": UI_CPP,
         f"src/lpi_{lower}.cpp": LPI_CPP,
-        "src/PluginProcessor.h": PROCESSOR_H,
-        "src/PluginProcessor.cpp": PROCESSOR_CPP,
+        f"src/vst3_{lower}.cpp": VST3_CPP,
+        f"test/vst3_{lower}_tests.cpp": VST3_TESTS,
         "src/DSPTests.cpp": DSP_TESTS,
         f"test/lpi_{lower}_gui_harness.c": GUI_HARNESS,
         "test/golden/README.md": GOLDEN_README,
@@ -758,7 +748,7 @@ def main():
     channel = struct.pack("<%df" % length, 1.0, *([0.0] * (length - 1)))
     (dest / "test" / "golden" / "ir_default.f32").write_bytes(channel + channel)
 
-    print(f"Scaffolded VSTs/{name} ({tokens['id']}, code {code}, state magic '{magic}')")
+    print(f"Scaffolded VSTs/{name} ({tokens['id']}, state magic '{magic}')")
     print("Next: see VSTs/%s/README.md. CI picks it up automatically." % name)
 
 

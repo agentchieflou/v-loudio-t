@@ -5,7 +5,7 @@
 #include <cstddef>
 
 /*
- * Delay widget tree (#142), shared by the VST3 editor (VSTs/common) and
+ * Delay widget tree (#142), shared by the VST3 editor (VSTs/common/vst3) and
  * the LPI offscreen editor (PluginABI/wrapper). JUCE-free; UI thread only.
  *
  * Layout (logical px, 860 x 320): row 1: time L, time R knobs, SYNC

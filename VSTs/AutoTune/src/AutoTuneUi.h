@@ -5,7 +5,7 @@
 #include <cstddef>
 
 /*
- * AutoTune widget tree (#146), shared by the VST3 editor (VSTs/common)
+ * AutoTune widget tree (#146), shared by the VST3 editor (VSTs/common/vst3)
  * and the LPI offscreen editor (PluginABI/wrapper). JUCE-free; UI thread
  * only.
  *

@@ -37,17 +37,17 @@ typedef loudio::ParamUpdate ParamUpdateMessage;
 
 /*
  * Single source of truth for every parameter's stable id string, display
- * name, range, default value and flags (#100/B3) -- the JUCE wrapper's
- * createParameterLayout(), ReverbCore and the LPI wrapper's
+ * name, range, default value and flags (#100/B3) -- the VST3 shell's
+ * parameters, ReverbCore and the LPI wrapper's
  * lpi_parameter_info table all read from this ONE list, so the numbers
  * can't drift out of sync the way two independently-maintained lists
  * eventually would. Bool/choice parameters (freeze, mode, uiTheme) are
  * represented the same way as every other parameter here -- a plain float
  * range plus a flag -- since at this level (and at LPI's
  * lpi_parameter_info level) they're just a float in [min,max];
- * JUCE-specific display concerns (AudioParameterChoice's string labels,
- * AudioParameterBool's automation curve) are layered on top only in
- * createParameterLayout() itself, not part of this shared contract.
+ * format-specific display concerns (the VST3 list labels, the toggle's
+ * step count) are layered on top by the wrappers, not part of this shared
+ * contract.
  *
  * Order matches ReverbParamIndex exactly -- kReverbParams[i].index == i is
  * asserted by DSPTests.cpp.

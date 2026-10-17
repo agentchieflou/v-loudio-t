@@ -11,8 +11,8 @@ Scaffolded with `tools/new_plugin.py Phaser`.
 | DSP core (P1 contract) | `src/PhaserCore.{h,cpp}` |
 | cuif UI (shared by both editors) | `src/PhaserUi.{h,cpp}` |
 | LPI build (P2 template) | `src/lpi_phaser.cpp` |
-| VST3/Standalone build (P3 templates) | `src/PluginProcessor.{h,cpp}` |
-| Tests | `src/DSPTests.cpp` (generic kit + own), `test/lpi_phaser_gui_harness.c`, `test/golden/` |
+| VST3 build (VST3 SDK, `VSTs/common/vst3`) | `src/vst3_phaser.cpp` |
+| Tests | `src/DSPTests.cpp` (generic kit + own), `test/vst3_phaser_tests.cpp`, `test/lpi_phaser_gui_harness.c`, `test/golden/` |
 
 ## Signal path
 
@@ -51,7 +51,11 @@ Build (Windows, from the repo root):
 
     cmake -S VSTs/Phaser -B build/phaser
     cmake --build build/phaser --config Debug --target dsp_tests lpi_phaser lpi_phaser_gui_harness lpi_conformance
-    cmake --build build/phaser --config Debug --target LoudioPhaser_VST3 LoudioPhaser_Standalone
+
+VST3 (Windows, macOS or Linux):
+
+    cmake -S VSTs/Phaser -B build/phaser-vst3 -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build/phaser-vst3 --config Debug --target LoudioPhaser_VST3_validate vst3_phaser_tests
 
 DSP tests only (any platform):
 

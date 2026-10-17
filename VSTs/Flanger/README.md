@@ -11,8 +11,8 @@ Blueprint: `Plugins/Modulation/Flanger/README.md`. Scaffolded with
 | DSP core (P1 contract) | `src/FlangerCore.{h,cpp}` |
 | cuif UI (shared by both editors) | `src/FlangerUi.{h,cpp}` |
 | LPI build (P2 template) | `src/lpi_flanger.cpp` |
-| VST3/Standalone build (P3 templates) | `src/PluginProcessor.{h,cpp}` |
-| Tests | `src/DSPTests.cpp` (generic kit + own), `test/lpi_flanger_gui_harness.c`, `test/golden/` |
+| VST3 build (VST3 SDK, `VSTs/common/vst3`) | `src/vst3_flanger.cpp` |
+| Tests | `src/DSPTests.cpp` (generic kit + own), `test/vst3_flanger_tests.cpp`, `test/lpi_flanger_gui_harness.c`, `test/golden/` |
 
 ## Signal path
 
@@ -54,7 +54,11 @@ Build (Windows, from the repo root):
 
     cmake -S VSTs/Flanger -B build/flanger
     cmake --build build/flanger --config Debug --target dsp_tests lpi_flanger lpi_flanger_gui_harness lpi_conformance
-    cmake --build build/flanger --config Debug --target LoudioFlanger_VST3 LoudioFlanger_Standalone
+
+VST3 (Windows, macOS or Linux):
+
+    cmake -S VSTs/Flanger -B build/flanger-vst3 -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build/flanger-vst3 --config Debug --target LoudioFlanger_VST3_validate vst3_flanger_tests
 
 DSP tests only (any platform):
 

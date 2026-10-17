@@ -63,8 +63,13 @@ void DelayCore::applyParams(bool immediate) {
     if (!changed) return;
 
     refreshTimes(immediate);
-    float lowHz = std::clamp(params[kDelayLowCut], 20.0f, (float)sampleRate * 0.45f);
-    float highHz = std::clamp(params[kDelayHighCut], 1000.0f, (float)sampleRate * 0.45f);
+    /* Floor first, then the Nyquist limit: same as std::clamp at any real
+     * rate, and still defined below ~2.2 kHz, where the limit drops under
+     * the floor (std::clamp's hi < lo is undefined; the VST3 validator
+     * runs at 1234.5678 Hz, #171). */
+    const float nyquistLimit = (float)sampleRate * 0.45f;
+    float lowHz = std::min(std::max(params[kDelayLowCut], 20.0f), nyquistLimit);
+    float highHz = std::min(std::max(params[kDelayHighCut], 1000.0f), nyquistLimit);
     lowCutActive = params[kDelayLowCut] > 20.0f;
     highCutActive = params[kDelayHighCut] < 20000.0f;
     if (immediate || params[kDelayLowCut] != applied[kDelayLowCut]) {

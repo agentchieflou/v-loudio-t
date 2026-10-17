@@ -28,7 +28,7 @@ extern "C" {
  * Intended for audio-thread <-> UI-thread data exchange (parameter changes,
  * analyzer/FFT data) without the audio thread ever allocating, blocking, or
  * taking a lock. This header has a plain C ABI so it can be included from
- * both the JUCE/C++ DSP side and the cuif C side without a language bridge.
+ * both the C++ DSP side and the cuif C side without a language bridge.
  *
  * Ordering uses `volatile` indices plus MemoryBarrier() rather than C11
  * <stdatomic.h> -- the MSVC toolchain used to build this project does not

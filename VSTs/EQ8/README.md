@@ -8,8 +8,8 @@
 | DSP core (P1 contract) | `src/EQ8Core.{h,cpp}` |
 | cuif UI (shared by both editors) | `src/EQ8Ui.{h,cpp}` |
 | LPI build (P2 template) | `src/lpi_eq8.cpp` |
-| VST3/Standalone build (P3 templates) | `src/PluginProcessor.{h,cpp}` |
-| Tests | `src/DSPTests.cpp` (generic kit + own), `test/lpi_eq8_gui_harness.c`, `test/golden/` |
+| VST3 build (VST3 SDK, `VSTs/common/vst3`) | `src/vst3_eq8.cpp` |
+| Tests | `src/DSPTests.cpp` (generic kit + own), `test/vst3_eq8_tests.cpp`, `test/lpi_eq8_gui_harness.c`, `test/golden/` |
 
 Parameters: 8 bands x {type (Off/LP/HP/low shelf/high shelf/bell/notch),
 frequency, gain, Q} + output gain + bypass. The UI is the EQ curve widget
@@ -24,7 +24,11 @@ Build (Windows, from the repo root):
 
     cmake -S VSTs/EQ8 -B build/eq8
     cmake --build build/eq8 --config Debug --target dsp_tests lpi_eq8 lpi_eq8_gui_harness lpi_conformance
-    cmake --build build/eq8 --config Debug --target LoudioEQ8_VST3 LoudioEQ8_Standalone
+
+VST3 (Windows, macOS or Linux):
+
+    cmake -S VSTs/EQ8 -B build/eq8-vst3 -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build/eq8-vst3 --config Debug --target LoudioEQ8_VST3_validate vst3_eq8_tests
 
 DSP tests only (any platform):
 

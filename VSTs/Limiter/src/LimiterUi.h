@@ -5,7 +5,7 @@
 #include <cstddef>
 
 /*
- * Limiter widget tree (#139), shared by the VST3 editor (VSTs/common) and
+ * Limiter widget tree (#139), shared by the VST3 editor (VSTs/common/vst3) and
  * the LPI offscreen editor (PluginABI/wrapper). JUCE-free; UI thread only.
  *
  * Layout (logical px, 620 x 260): input / gain-reduction / output meters

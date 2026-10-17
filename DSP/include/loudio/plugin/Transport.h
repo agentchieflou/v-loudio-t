@@ -6,7 +6,8 @@
  * Host transport as a plugin core sees it (P9, #135). Mirrors
  * lpi_transport_info / LPI_TRANSPORT_* in PluginABI/include/lpi/lpi.h bit
  * for bit (the LPI wrapper static_asserts this) without making the DSP
- * library depend on lpi.h; the VST3 wrapper fills it from JUCE's playhead.
+ * library depend on lpi.h; the VST3 shell fills it from the host's
+ * ProcessContext.
  *
  * A core that wants transport adds
  *     void setTransport(const loudio::TransportInfo& t);

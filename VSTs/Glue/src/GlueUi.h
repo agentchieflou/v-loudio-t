@@ -5,7 +5,7 @@
 #include <cstddef>
 
 /*
- * Glue widget tree (#140), shared by the VST3 editor (VSTs/common) and
+ * Glue widget tree (#140), shared by the VST3 editor (VSTs/common/vst3) and
  * the LPI offscreen editor (PluginABI/wrapper). JUCE-free; UI thread only.
  *
  * Layout (logical px, 700 x 300): input / gain-reduction / output meters

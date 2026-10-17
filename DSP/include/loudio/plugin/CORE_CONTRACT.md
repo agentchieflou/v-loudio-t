@@ -3,7 +3,7 @@
 A plugin's DSP engine (its *core*: `ReverbCore` today, `CompressorCore`
 etc. tomorrow) is a plain C++ class with no base class. The format
 wrappers (the LPI wrapper template `PluginABI/wrapper/lpi/plugin_template.h`,
-P3's VST3 common code) template on it,
+the VST3 shell `VSTs/common/vst3/LoudioVst3.h`) template on it,
 so a core only has to provide the members below with these exact meanings.
 Everything parameter-shaped comes from the three headers next to this file:
 
@@ -48,8 +48,8 @@ public:
 - `process()` and `setParameterValueDirect()` run on the audio thread.
 - `setParameterValue(s)` runs on exactly one non-realtime thread for the
   instance's lifetime (the LPI ABI's `set_parameter_value` contract). The
-  JUCE wrapper does not use it: it reads APVTS on the audio thread and calls
-  `setParameterValueDirect()`.
+  VST3 shell (`VSTs/common/vst3`) does not use it: it keeps each value in an
+  atomic, read on the audio thread, and calls `setParameterValueDirect()`.
 - `getState()`/`setState()` run on the host's main thread while the plugin
   is deactivated, or on the audio thread. They touch only the value array.
 

@@ -11,8 +11,8 @@ host-side). Scaffolded with `tools/new_plugin.py Bus`.
 | DSP core (P1 contract) | `src/BusCore.{h,cpp}` |
 | cuif UI (shared by both editors) | `src/BusUi.{h,cpp}` |
 | LPI build (P2 template) | `src/lpi_bus.cpp` |
-| VST3/Standalone build (P3 templates) | `src/PluginProcessor.{h,cpp}` |
-| Tests | `src/DSPTests.cpp` (generic kit + own), `test/lpi_bus_gui_harness.c`, `test/golden/` |
+| VST3 build (VST3 SDK, `VSTs/common/vst3`) | `src/vst3_bus.cpp` |
+| Tests | `src/DSPTests.cpp` (generic kit + own), `test/vst3_bus_tests.cpp`, `test/lpi_bus_gui_harness.c`, `test/golden/` |
 
 ## Signal path
 
@@ -54,7 +54,11 @@ Build (Windows, from the repo root):
 
     cmake -S VSTs/Bus -B build/bus
     cmake --build build/bus --config Debug --target dsp_tests lpi_bus lpi_bus_gui_harness lpi_conformance
-    cmake --build build/bus --config Debug --target LoudioBus_VST3 LoudioBus_Standalone
+
+VST3 (Windows, macOS or Linux):
+
+    cmake -S VSTs/Bus -B build/bus-vst3 -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build/bus-vst3 --config Debug --target LoudioBus_VST3_validate vst3_bus_tests
 
 DSP tests only (any platform):
 

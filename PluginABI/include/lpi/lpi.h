@@ -45,7 +45,7 @@
  * against a new host, or a new plugin against an old host.
  *
  * Native-window (VST3-style HWND embedding) GUIs are deliberately NOT part
- * of LPI v1 -- the VST3/JUCE wrapper already covers that case for Ableton
+ * of LPI v1 -- the VST3 build already covers that case for Ableton
  * and other third-party hosts. LPI's own GUI story (an "lpi.gui.offscreen.v1"
  * extension, added in a later issue) only needs to serve noprod's chosen
  * frame-streaming model.

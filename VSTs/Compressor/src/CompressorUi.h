@@ -5,7 +5,7 @@
 #include <cstddef>
 
 /*
- * Compressor widget tree (#137), shared by the VST3 editor (VSTs/common)
+ * Compressor widget tree (#137), shared by the VST3 editor (VSTs/common/vst3)
  * and the LPI offscreen editor (PluginABI/wrapper). JUCE-free; UI thread
  * only.
  *
