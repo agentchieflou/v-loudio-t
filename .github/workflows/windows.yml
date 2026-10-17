@@ -79,13 +79,10 @@ jobs:
     timeout-minutes: 5
     outputs:
       list: ${{ steps.list.outputs.list }}
-      vst3sdk: ${{ steps.list.outputs.vst3sdk }}
     steps:
       - uses: actions/checkout@v4
       - id: list
-        run: |
-          echo "list=$(python3 tools/list_plugins.py)" >> "$GITHUB_OUTPUT"
-          echo "vst3sdk=$(python3 tools/list_plugins.py --vst3sdk)" >> "$GITHUB_OUTPUT"
+        run: echo "list=$(python3 tools/list_plugins.py)" >> "$GITHUB_OUTPUT"
 
   plugin:
     needs: plugins
@@ -98,8 +95,6 @@ jobs:
     name: plugin (${{ matrix.plugin.name }})
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
       - name: Fetch Mesa (software OpenGL)
         shell: pwsh
         run: |
@@ -129,26 +124,20 @@ jobs:
           name: lpi-${{ matrix.plugin.lower }}-frames
           path: build/plugin/bin/Debug/*.ppm
           if-no-files-found: ignore
-      # JUCE plugins only; a plugin on the VST3 SDK (#171) builds and
-      # validates its VST3 in the vst3 job below, on all three platforms.
-      - name: Build VST3 + Standalone (JUCE)
-        if: ${{ !matrix.plugin.vst3sdk }}
-        run: cmake --build build/plugin --config Debug --target Loudio${{ matrix.plugin.name }}_VST3 Loudio${{ matrix.plugin.name }}_Standalone
 
-  # Plugins built on the VST3 SDK directly (#171, ThirdParty/vst3sdk; no
-  # JUCE, no submodule): the VST3 bundle, the SDK's validator in extensive
-  # mode, and the plugin's VST3 tests (state, buses, same sound as its core
-  # and, on Windows, as its LPI build) on Windows, macOS and Linux.
+  # Every plugin's VST3, on the VST3 SDK directly (#171, ThirdParty/vst3sdk;
+  # no JUCE): the bundle, the SDK's validator in extensive mode, and the
+  # plugin's VST3 tests (state, buses, same sound as its core and, on
+  # Windows, as its LPI build) on Windows, macOS and Linux.
   vst3:
     needs: plugins
-    if: ${{ needs.plugins.outputs.vst3sdk != '[]' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
-        plugin: ${{ fromJson(needs.plugins.outputs.vst3sdk) }}
+        plugin: ${{ fromJson(needs.plugins.outputs.list) }}
     name: vst3 (${{ matrix.plugin.name }}, ${{ matrix.os }})
     steps:
       - uses: actions/checkout@v4
@@ -174,8 +163,8 @@ jobs:
           path: build/vst3/VST3/Debug/
           if-no-files-found: error
 
-  # Fast, GPU-free, JUCE-free DSP feedback: the shared DSP component tests
-  # and every plugin's DSP tests (which need neither Windows nor JUCE) in
+  # Fast, GPU-free DSP feedback: the shared DSP component tests
+  # and every plugin's DSP tests (which need neither Windows nor the SDK) in
   # well under a minute.
   dsp-linux:
     needs: plugins
@@ -189,7 +178,7 @@ jobs:
         run: cmake --build build/dsp
       - name: loudio_dsp_tests
         run: ./build/dsp/loudio_dsp_tests
-      - name: Plugin DSP tests (no JUCE)
+      - name: Plugin DSP tests
         env:
           PLUGINS: ${{ needs.plugins.outputs.list }}
         run: |

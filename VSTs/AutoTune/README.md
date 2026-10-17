@@ -13,8 +13,8 @@ TD-PSOLA resynthesis with a formant shift. Blueprint:
 | Pitch detector / shifter | `DSP/include/loudio/dsp/PitchDetectorYin.h`, `PsolaShifter.h` (new) |
 | cuif UI (shared by both editors) | `src/AutoTuneUi.{h,cpp}` |
 | LPI build (P2 template) | `src/lpi_autotune.cpp` |
-| VST3/Standalone build (P3 templates) | `src/PluginProcessor.{h,cpp}` |
-| Tests | `src/DSPTests.cpp` (generic kit + own), `test/lpi_autotune_gui_harness.c`; no golden IR (time-variant, exempt) |
+| VST3 build (VST3 SDK, `VSTs/common/vst3`) | `src/vst3_autotune.cpp` |
+| Tests | `src/DSPTests.cpp` (generic kit + own), `test/vst3_autotune_tests.cpp`, `test/lpi_autotune_gui_harness.c`; no golden IR (time-variant, exempt) |
 
 ## Signal path
 
@@ -63,7 +63,11 @@ Build (Windows, from the repo root):
 
     cmake -S VSTs/AutoTune -B build/autotune
     cmake --build build/autotune --config Debug --target dsp_tests lpi_autotune lpi_autotune_gui_harness lpi_conformance
-    cmake --build build/autotune --config Debug --target LoudioAutoTune_VST3 LoudioAutoTune_Standalone
+
+VST3 (Windows, macOS or Linux):
+
+    cmake -S VSTs/AutoTune -B build/autotune-vst3 -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build/autotune-vst3 --config Debug --target LoudioAutoTune_VST3_validate vst3_autotune_tests
 
 DSP tests only (any platform):
 

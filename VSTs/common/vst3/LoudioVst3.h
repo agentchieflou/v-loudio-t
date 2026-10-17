@@ -2,9 +2,9 @@
 
 /*
  * Shared VST3 shell on the Steinberg VST3 SDK directly (#171), no JUCE.
- * Replaces VSTs/common/LoudioProcessor.h + LoudioEditor.h for a plugin
- * that has moved off JUCE; the Reverb is the first
- * (VSTs/Reverb/src/vst3_reverb.cpp shows the shape). It is the VST3
+ * It replaced the JUCE-based LoudioProcessor.h + LoudioEditor.h (P3, #129)
+ * and every plugin's VST3 is built on it (VSTs/Reverb/src/vst3_reverb.cpp
+ * shows the shape). It is the VST3
  * counterpart of the LPI wrapper template (PluginABI/wrapper/lpi/
  * plugin_template.h): a plugin's VST3 build is its Traits plus one
  * LOUDIO_VST3_DEFINE_PLUGIN(Traits) line.
@@ -324,8 +324,11 @@ public:
         if (data.symbolicSampleSize != sv::kSample32) return kResultFalse;
 
         pushValuesIntoCore();
+        /* Only from a host that sends a process context; without one the
+         * core keeps free-running, as in the LPI build with no
+         * lpi.transport.v1 calls (CORE_CONTRACT.md). */
         if constexpr (requires (Core& c, const TransportInfo& t) { c.setTransport(t); }) {
-            core.setTransport(transportFrom(data.processContext));
+            if (data.processContext) core.setTransport(transportFrom(data.processContext));
         }
 
         float* outL = data.outputs[0].channelBuffers32[0];
@@ -422,7 +425,6 @@ private:
 
     static TransportInfo transportFrom(const sv::ProcessContext* ctx) {
         TransportInfo t;
-        if (!ctx) return t;
         t.sampleRate = ctx->sampleRate;
         if (ctx->state & sv::ProcessContext::kTempoValid) { t.tempoBpm = ctx->tempo; t.flags |= kTransportTempoValid; }
         if (ctx->state & sv::ProcessContext::kProjectTimeMusicValid) { t.ppqPosition = ctx->projectTimeMusic; t.flags |= kTransportPpqValid; }

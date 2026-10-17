@@ -5,7 +5,7 @@
 #include <cstddef>
 
 /*
- * Phaser widget tree (#144), shared by the VST3 editor (VSTs/common) and
+ * Phaser widget tree (#144), shared by the VST3 editor (VSTs/common/vst3) and
  * the LPI offscreen editor (PluginABI/wrapper). JUCE-free; UI thread only.
  *
  * Layout (logical px, 580 x 220): rate, depth, centre, feedback, stereo

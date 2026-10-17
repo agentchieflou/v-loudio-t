@@ -11,8 +11,8 @@ soft-clipped feedback with cross-feed, LFO modulation, dry/wet. Blueprint:
 | DSP core (P1 contract) | `src/DelayCore.{h,cpp}` |
 | cuif UI (shared by both editors) | `src/DelayUi.{h,cpp}` |
 | LPI build (P2 template) | `src/lpi_delay.cpp` |
-| VST3/Standalone build (P3 templates) | `src/PluginProcessor.{h,cpp}` |
-| Tests | `src/DSPTests.cpp` (generic kit + own), `test/lpi_delay_gui_harness.c`, `test/golden/` |
+| VST3 build (VST3 SDK, `VSTs/common/vst3`) | `src/vst3_delay.cpp` |
+| Tests | `src/DSPTests.cpp` (generic kit + own), `test/vst3_delay_tests.cpp`, `test/lpi_delay_gui_harness.c`, `test/golden/` |
 
 ## Signal path
 
@@ -25,7 +25,7 @@ back into its own line and, scaled by `crossFeed`, into the other one
 input. No latency.
 
 Sync on takes each side's division at the host tempo (`setTransport`,
-through `lpi.transport.v1` or the JUCE playhead); without a valid tempo
+through `lpi.transport.v1` or the VST3 host's process context); without a valid tempo
 the last one (default 120 BPM) stands. Time changes glide over 20 ms.
 
 ## Parameters
@@ -70,7 +70,11 @@ Build (Windows, from the repo root):
 
     cmake -S VSTs/Delay -B build/delay
     cmake --build build/delay --config Debug --target dsp_tests lpi_delay lpi_delay_gui_harness lpi_conformance
-    cmake --build build/delay --config Debug --target LoudioDelay_VST3 LoudioDelay_Standalone
+
+VST3 (Windows, macOS or Linux):
+
+    cmake -S VSTs/Delay -B build/delay-vst3 -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build/delay-vst3 --config Debug --target LoudioDelay_VST3_validate vst3_delay_tests
 
 DSP tests only (any platform):
 

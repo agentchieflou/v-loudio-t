@@ -33,19 +33,10 @@ loudio_add_vst3_plugin(LoudioReverb_VST3
         src/ReverbUi.cpp
 )
 
-# Same sound (#171): the built bundle, hosted through the SDK's hosting
-# classes, against ReverbCore run directly and (Windows) lpi_reverb.dll.
-add_executable(vst3_reverb_tests test/vst3_reverb_tests.cpp src/ReverbCore.cpp)
-target_link_libraries(vst3_reverb_tests PRIVATE loudio_vst3_hosting)
-target_include_directories(vst3_reverb_tests PRIVATE src ../common ../../Framework/include ${LOUDIO_DSP_INCLUDE} ../../PluginABI/include)
-target_compile_features(vst3_reverb_tests PRIVATE cxx_std_20)
-get_target_property(LOUDIO_REVERB_VST3_BUNDLE LoudioReverb_VST3 LOUDIO_VST3_BUNDLE)
-target_compile_definitions(vst3_reverb_tests PRIVATE
-    NOMINMAX
-    LOUDIO_REVERB_VST3_BUNDLE="${LOUDIO_REVERB_VST3_BUNDLE}"
-    LOUDIO_PLUGIN_VERSION="${PROJECT_VERSION}"
+loudio_add_vst3_tests(vst3_reverb_tests LoudioReverb_VST3
+    test/vst3_reverb_tests.cpp
+    src/ReverbCore.cpp
 )
-add_dependencies(vst3_reverb_tests LoudioReverb_VST3)
 endif() # NOT LOUDIO_PLUGIN_TESTS_ONLY
 
 option(LOUDIO_REVERB_BUILD_TESTS "Build DSP unit tests executable" ON)

@@ -116,3 +116,27 @@ function(loudio_add_vst3_plugin target)
         VERBATIM
     )
 endfunction()
+
+# A test host for a plugin's built bundle (Vst3TestHost.h):
+#   loudio_add_vst3_tests(vst3_reverb_tests LoudioReverb_VST3 test/vst3_reverb_tests.cpp src/ReverbCore.cpp)
+# LOUDIO_VST3_BUNDLE is the bundle's path; on Windows the test also takes
+# the plugin's lpi_<name>.dll as its first argument.
+function(loudio_add_vst3_tests target plugin_target)
+    add_executable(${target} ${ARGN})
+    target_link_libraries(${target} PRIVATE loudio_vst3_hosting)
+    target_include_directories(${target} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${LOUDIO_ROOT_DIR}/VSTs/common
+        ${LOUDIO_ROOT_DIR}/Framework/include
+        ${LOUDIO_ROOT_DIR}/DSP/include
+        ${LOUDIO_ROOT_DIR}/PluginABI/include
+    )
+    target_compile_features(${target} PRIVATE cxx_std_20)
+    get_target_property(bundle ${plugin_target} LOUDIO_VST3_BUNDLE)
+    target_compile_definitions(${target} PRIVATE
+        NOMINMAX
+        LOUDIO_VST3_BUNDLE="${bundle}"
+        LOUDIO_PLUGIN_VERSION="${PROJECT_VERSION}"
+    )
+    add_dependencies(${target} ${plugin_target})
+endfunction()

@@ -11,8 +11,8 @@ proof, true-peak and latency details live there). Scaffolded with
 | DSP core (P1 contract) | `src/LimiterCore.{h,cpp}` |
 | cuif UI (shared by both editors) | `src/LimiterUi.{h,cpp}` |
 | LPI build (P2 template) | `src/lpi_limiter.cpp` |
-| VST3/Standalone build (P3 templates) | `src/PluginProcessor.{h,cpp}` |
-| Tests | `src/DSPTests.cpp` (generic kit + own), `test/lpi_limiter_gui_harness.c`, `test/golden/` |
+| VST3 build (VST3 SDK, `VSTs/common/vst3`) | `src/vst3_limiter.cpp` |
+| Tests | `src/DSPTests.cpp` (generic kit + own), `test/vst3_limiter_tests.cpp`, `test/lpi_limiter_gui_harness.c`, `test/golden/` |
 
 ## Signal path
 
@@ -59,7 +59,11 @@ Build (Windows, from the repo root):
 
     cmake -S VSTs/Limiter -B build/limiter
     cmake --build build/limiter --config Debug --target dsp_tests lpi_limiter lpi_limiter_gui_harness lpi_conformance
-    cmake --build build/limiter --config Debug --target LoudioLimiter_VST3 LoudioLimiter_Standalone
+
+VST3 (Windows, macOS or Linux):
+
+    cmake -S VSTs/Limiter -B build/limiter-vst3 -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build/limiter-vst3 --config Debug --target LoudioLimiter_VST3_validate vst3_limiter_tests
 
 DSP tests only (any platform):
 

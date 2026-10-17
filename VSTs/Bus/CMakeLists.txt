@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)
 project(LoudioBus VERSION 0.1.0)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -17,62 +17,26 @@ set(LOUDIO_CUIF_SOURCES
     ${LOUDIO_FRAMEWORK_SRC}/theme_greens.c
 )
 
-# ON: build only dsp_tests -- no JUCE, no plugin targets (the Linux CI job).
-option(LOUDIO_PLUGIN_TESTS_ONLY "Build only the DSP tests (skips JUCE and all plugin targets)" OFF)
+# ON: build only dsp_tests -- no VST3 SDK, no plugin targets (the Linux CI job).
+option(LOUDIO_PLUGIN_TESTS_ONLY "Build only the DSP tests (skips the VST3 SDK and all plugin targets)" OFF)
 
 if(NOT LOUDIO_PLUGIN_TESTS_ONLY)
-# The JUCE submodule is shared by every plugin: VSTs/JUCE.
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../JUCE ${CMAKE_BINARY_DIR}/juce)
+# VST3 on the VST3 SDK directly (#171, VSTs/common/vst3), on Windows, macOS
+# and Linux; the cuif editor is Windows-only, like cuif itself.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../common/vst3/LoudioVst3.cmake)
 
-juce_add_plugin(LoudioBus
-    PRODUCT_NAME "Loudio Bus"
-    COMPANY_NAME "Loudio"
-    PLUGIN_MANUFACTURER_CODE Loud
-    PLUGIN_CODE Bus1
-    FORMATS VST3 Standalone
-    VST3_CATEGORIES Fx
-    IS_SYNTH FALSE
-    NEEDS_MIDI_INPUT FALSE
-    NEEDS_MIDI_OUTPUT FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+loudio_add_vst3_plugin(LoudioBus_VST3
+    PACKAGE_NAME "Loudio Bus"
+    SOURCES
+        src/vst3_bus.cpp
+        src/BusCore.cpp
+    EDITOR_SOURCES
+        src/BusUi.cpp
 )
-
-juce_generate_juce_header(LoudioBus)
-
-target_sources(LoudioBus PRIVATE
-    src/PluginProcessor.cpp
-    src/BusUi.cpp
+loudio_add_vst3_tests(vst3_bus_tests LoudioBus_VST3
+    test/vst3_bus_tests.cpp
     src/BusCore.cpp
-    ${LOUDIO_CUIF_SOURCES}
 )
-
-target_include_directories(LoudioBus PRIVATE src ../common ../../Framework/include ${LOUDIO_DSP_INCLUDE})
-
-target_compile_definitions(LoudioBus PUBLIC
-    JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
-    JUCE_VST3_CAN_REPLACE_VST2=0
-PRIVATE
-    # NOMINMAX: cuif/ring_buffer.h (via the core's ParamQueue) pulls in
-    # <windows.h>, whose min/max macros otherwise break std::min/std::max
-    # in the core. JUCE defines it itself (guarded), so no conflict.
-    NOMINMAX
-)
-
-target_link_libraries(LoudioBus PRIVATE
-    juce::juce_dsp
-    juce::juce_gui_basics
-    opengl32
-PUBLIC
-    juce::juce_recommended_config_flags
-    juce::juce_recommended_lto_flags
-    juce::juce_recommended_warning_flags
-)
-
-# juce_audio_utils only for the Standalone's device/file glue (see Reverb, #94).
-if(TARGET LoudioBus_Standalone)
-    target_link_libraries(LoudioBus_Standalone PRIVATE juce::juce_audio_utils)
-endif()
 endif() # NOT LOUDIO_PLUGIN_TESTS_ONLY
 
 option(LOUDIO_BUS_BUILD_TESTS "Build DSP unit tests executable" ON)

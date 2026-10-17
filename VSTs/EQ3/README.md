@@ -11,8 +11,8 @@ from kill (−60 dB) to +12 dB, phase-coherent sum. Blueprint:
 | DSP core (P1 contract) | `src/EQ3Core.{h,cpp}` |
 | cuif UI (shared by both editors) | `src/EQ3Ui.{h,cpp}` |
 | LPI build (P2 template) | `src/lpi_eq3.cpp` |
-| VST3/Standalone build (P3 templates) | `src/PluginProcessor.{h,cpp}` |
-| Tests | `src/DSPTests.cpp` (generic kit + own), `test/lpi_eq3_gui_harness.c`, `test/golden/` |
+| VST3 build (VST3 SDK, `VSTs/common/vst3`) | `src/vst3_eq3.cpp` |
+| Tests | `src/DSPTests.cpp` (generic kit + own), `test/vst3_eq3_tests.cpp`, `test/lpi_eq3_gui_harness.c`, `test/golden/` |
 
 ## Signal path
 
@@ -54,7 +54,11 @@ Build (Windows, from the repo root):
 
     cmake -S VSTs/EQ3 -B build/eq3
     cmake --build build/eq3 --config Debug --target dsp_tests lpi_eq3 lpi_eq3_gui_harness lpi_conformance
-    cmake --build build/eq3 --config Debug --target LoudioEQ3_VST3 LoudioEQ3_Standalone
+
+VST3 (Windows, macOS or Linux):
+
+    cmake -S VSTs/EQ3 -B build/eq3-vst3 -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build/eq3-vst3 --config Debug --target LoudioEQ3_VST3_validate vst3_eq3_tests
 
 DSP tests only (any platform):
 
