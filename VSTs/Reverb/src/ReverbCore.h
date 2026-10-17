@@ -27,35 +27,28 @@
  *   - setParameterValueDirect(): same-thread, immediate, no queue. For a
  *     host that already has its own thread-safe value source and just wants
  *     to push a fresh snapshot before each process() call -- this is what
- *     LoudioReverbProcessor::processBlock() uses every block, reading
- *     APVTS's live (host-automation-updated) values on the audio thread and
- *     forwarding them here on that SAME thread. No queue is needed because
- *     caller and process() are already sequential on one thread.
+ *     the VST3 shell (VSTs/common/vst3/LoudioVst3.h, #171) does every
+ *     block, reading its own atomics (updated from the host's
+ *     IParameterChanges) on the audio thread and forwarding them here on
+ *     that SAME thread. No queue is needed because caller and process()
+ *     are already sequential on one thread.
  *
  *   - setParameterValue(): RT-safe, enqueues via the platform's lock-free
  *     SPSC loudio::ParamQueue (DSP/include/loudio/plugin, #127), applied at
  *     the top of the next process() call. May be called from exactly one
  *     dedicated non-realtime thread over the instance's lifetime -- matches
  *     the LPI ABI's set_parameter_value contract exactly (see
- *     PluginABI/include/lpi/lpi.h), since that's the mechanism a future LPI
- *     wrapper forwards directly. Not used by the JUCE wrapper today (its
- *     own uiToDspRingBuffer/APVTS bridge in PluginProcessor.cpp/
- *     PluginEditor.cpp is unchanged by this refactor -- that bridge is
- *     JUCE-wrapper-specific, not something ReverbCore needs to know about).
+ *     PluginABI/include/lpi/lpi.h), which the LPI wrapper forwards
+ *     directly. The VST3 shell doesn't use it.
  *
  * Preset/state save (getState/setState) is the platform's small versioned
  * binary blob keyed on parameter id strings (loudio::StateBlob, format
  * documented in DSP/include/loudio/plugin/StateBlob.h; the Reverb's magic
- * is "LRVB"), independent of JUCE's own APVTS XML preset format --
- * LoudioReverbProcessor::getStateInformation/setStateInformation keep using
- * APVTS's existing XML shape unchanged, preserving current preset-file
- * compatibility. This is a second, separate state mechanism for hosts that
- * have no APVTS at all.
+ * is "LRVB"). Both the LPI and the VST3 build save exactly these bytes.
  *
- * Analyzer (FFT) data has no ring buffer of its own here -- that's the same
- * "JUCE-wrapper-specific UI bridge" reasoning as above. A host checks the
- * dirty flag after each process() call and copies out fresh magnitudes if a
- * new frame completed.
+ * Analyzer (FFT) data has no ring buffer of its own here: each wrapper
+ * bridges it to its own UI. A host checks the dirty flag after each
+ * process() call and copies out fresh magnitudes if a new frame completed.
  */
 class ReverbCore {
 public:

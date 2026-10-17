@@ -25,7 +25,7 @@
  * ALSO never block -- the plugin is responsible for internally enqueuing
  * the change (e.g. via a lock-free SPSC ring buffer, the same pattern
  * already used for audio<->UI communication in
- * Framework/include/cuif/ring_buffer.h and VSTs/Reverb/src/PluginProcessor)
+ * Framework/include/cuif/ring_buffer.h and DSP/include/loudio/plugin/ParamQueue.h)
  * and applying it from within process(). Hosts calling set_parameter_value
  * never need their own locking around it. A plugin wanting to accept
  * parameter changes from genuinely multiple concurrent non-audio threads

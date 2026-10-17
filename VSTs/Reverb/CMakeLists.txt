@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)
 project(LoudioReverb VERSION 0.1.0)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -7,77 +7,45 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Shared DSP building blocks (DSP/include/loudio/dsp), header-only.
 set(LOUDIO_DSP_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/../../DSP/include)
 
-# ON: build only dsp_tests -- no JUCE submodule, no plugin targets. This is
-# what the Linux CI job uses for fast DSP feedback; the full plugin build
-# stays Windows-only. LOUDIO_PLUGIN_TESTS_ONLY is the name every plugin
-# shares (the CI matrix passes it); LOUDIO_REVERB_TESTS_ONLY is kept as
-# an alias.
-option(LOUDIO_PLUGIN_TESTS_ONLY "Build only the DSP tests (skips JUCE and all plugin targets)" OFF)
+# ON: build only dsp_tests -- no VST3 SDK, no plugin targets. This is what
+# the Linux CI job uses for fast DSP feedback. LOUDIO_PLUGIN_TESTS_ONLY is
+# the name every plugin shares (the CI matrix passes it);
+# LOUDIO_REVERB_TESTS_ONLY is kept as an alias.
+option(LOUDIO_PLUGIN_TESTS_ONLY "Build only the DSP tests (skips the VST3 SDK and all plugin targets)" OFF)
 option(LOUDIO_REVERB_TESTS_ONLY "Alias of LOUDIO_PLUGIN_TESTS_ONLY" OFF)
 if(LOUDIO_REVERB_TESTS_ONLY)
     set(LOUDIO_PLUGIN_TESTS_ONLY ON)
 endif()
 
 if(NOT LOUDIO_PLUGIN_TESTS_ONLY)
-# The JUCE submodule is shared by every plugin: VSTs/JUCE.
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../JUCE ${CMAKE_BINARY_DIR}/juce)
+# VST3 on the VST3 SDK directly (#171), no JUCE: the shared shell in
+# VSTs/common/vst3 plus vst3_reverb.cpp. Builds on Windows, macOS and
+# Linux; the cuif editor (ReverbUi) is Windows-only, like cuif itself.
+# No Standalone: see VSTs/Reverb/README.md.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../common/vst3/LoudioVst3.cmake)
 
-juce_add_plugin(LoudioReverb
-    PRODUCT_NAME "Loudio Reverb"
-    COMPANY_NAME "Loudio"
-    PLUGIN_MANUFACTURER_CODE Loud
-    PLUGIN_CODE Rvb1
-    FORMATS VST3 Standalone
-    VST3_CATEGORIES Fx Reverb
-    IS_SYNTH FALSE
-    NEEDS_MIDI_INPUT FALSE
-    NEEDS_MIDI_OUTPUT FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+loudio_add_vst3_plugin(LoudioReverb_VST3
+    PACKAGE_NAME "Loudio Reverb"
+    SOURCES
+        src/vst3_reverb.cpp
+        src/ReverbCore.cpp
+    EDITOR_SOURCES
+        src/ReverbUi.cpp
 )
 
-juce_generate_juce_header(LoudioReverb)
-
-target_sources(LoudioReverb PRIVATE
-    src/PluginProcessor.cpp
-    src/ReverbUi.cpp
-    src/ReverbCore.cpp
-    ../../Framework/src/graphics.c
-    ../../Framework/src/font.c
-    ../../Framework/src/widget.c
-    ../../Framework/src/window_win32.c
-    ../../Framework/src/theme.c
-    ../../Framework/src/theme_hello_kitty.c
-    ../../Framework/src/theme_greens.c
+# Same sound (#171): the built bundle, hosted through the SDK's hosting
+# classes, against ReverbCore run directly and (Windows) lpi_reverb.dll.
+add_executable(vst3_reverb_tests test/vst3_reverb_tests.cpp src/ReverbCore.cpp)
+target_link_libraries(vst3_reverb_tests PRIVATE loudio_vst3_hosting)
+target_include_directories(vst3_reverb_tests PRIVATE src ../common ../../Framework/include ${LOUDIO_DSP_INCLUDE} ../../PluginABI/include)
+target_compile_features(vst3_reverb_tests PRIVATE cxx_std_20)
+get_target_property(LOUDIO_REVERB_VST3_BUNDLE LoudioReverb_VST3 LOUDIO_VST3_BUNDLE)
+target_compile_definitions(vst3_reverb_tests PRIVATE
+    NOMINMAX
+    LOUDIO_REVERB_VST3_BUNDLE="${LOUDIO_REVERB_VST3_BUNDLE}"
+    LOUDIO_PLUGIN_VERSION="${PROJECT_VERSION}"
 )
-
-target_include_directories(LoudioReverb PRIVATE src ../common ../../Framework/include ${LOUDIO_DSP_INCLUDE})
-
-target_compile_definitions(LoudioReverb PUBLIC
-    JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
-    JUCE_VST3_CAN_REPLACE_VST2=0
-)
-
-target_link_libraries(LoudioReverb PRIVATE
-    juce::juce_dsp
-    juce::juce_gui_basics
-    opengl32
-PUBLIC
-    juce::juce_recommended_config_flags
-    juce::juce_recommended_lto_flags
-    juce::juce_recommended_warning_flags
-)
-
-# juce_audio_utils (and its transitive juce_audio_devices/juce_audio_formats --
-# ASIO/WASAPI backends, FLAC/OggVorbis/AIFF/WAV codec tables) is only needed by
-# the Standalone format's AudioDeviceManager/StandaloneFilterWindow glue. The
-# VST3 format never touches an audio device or file codec directly -- the host
-# owns I/O -- and nothing in src/ references juce_audio_utils at all, so
-# linking it into the shared LoudioReverb target inflated the VST3 binary with
-# unused code for no reason. Scoped to the Standalone target only (#94).
-if(TARGET LoudioReverb_Standalone)
-    target_link_libraries(LoudioReverb_Standalone PRIVATE juce::juce_audio_utils)
-endif()
+add_dependencies(vst3_reverb_tests LoudioReverb_VST3)
 endif() # NOT LOUDIO_PLUGIN_TESTS_ONLY
 
 option(LOUDIO_REVERB_BUILD_TESTS "Build DSP unit tests executable" ON)
